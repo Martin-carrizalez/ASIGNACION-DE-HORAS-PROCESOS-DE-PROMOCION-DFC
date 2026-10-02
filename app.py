@@ -16,8 +16,14 @@ import pandas as pd
 import streamlit as st
 
 import docx_merge
+import marca
 
-st.set_page_config(page_title="Asignación de horas · DFC", layout="wide")
+st.set_page_config(page_title="Asignación de horas · DFC", layout="wide",
+                   page_icon="recursos/dfc_logo.png")
+marca.estilos()
+marca.cabecera("Asignación de horas",
+               "Vacancia, prelación y dictámenes del concurso cerrado.",
+               "Comisión Dictaminadora Interna")
 
 # ---------------------------------------------------------------------------
 # Reglas del proceso
@@ -364,8 +370,10 @@ with t_asig:
     else:
         for i, a in enumerate(estado()["asignaciones"]):
             c1, c2 = st.columns([8, 1])
-            c1.write("%s · %s · **%d hrs** · %s" % (a["convocatoria"], a["clave"],
-                                                    a["hrs"], a["nombre"]))
+            c1.markdown('<div class="tarjeta"><b>%s</b> · %d hrs<br>'
+                        '<span>%s · %s</span></div>'
+                        % (a["nombre"], a["hrs"], a["convocatoria"], a["clave"]),
+                        unsafe_allow_html=True)
             if c2.button("Quitar", key="del_%d" % i):
                 estado()["asignaciones"].pop(i)
                 st.rerun()

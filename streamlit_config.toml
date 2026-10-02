@@ -1,0 +1,7 @@
+# Tema tomado del logotipo de la DFC
+[theme]
+primaryColor = "#F2720C"
+backgroundColor = "#FBFAF8"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1B2432"
+font = "sans serif"
