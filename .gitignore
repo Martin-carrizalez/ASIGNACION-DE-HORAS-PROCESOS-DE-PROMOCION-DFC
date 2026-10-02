@@ -1,0 +1,9 @@
+# Los datos del proceso NUNCA se suben: nombres, RFC y puntajes de servidores públicos
+*.xlsx
+*.xls
+*.docx
+*.csv
+salidas/
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
