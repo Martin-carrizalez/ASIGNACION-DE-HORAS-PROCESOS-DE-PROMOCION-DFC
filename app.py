@@ -7,8 +7,10 @@ El código no contiene ningún dato personal: los dos Excel se cargan en el mome
 se procesan en memoria y no se guardan en disco ni en el repositorio.
 """
 
+import base64
 import io
 import json
+import pathlib
 import re
 from datetime import date
 
@@ -16,14 +18,8 @@ import pandas as pd
 import streamlit as st
 
 import docx_merge
-import marca
 
-st.set_page_config(page_title="Asignación de horas · DFC", layout="wide",
-                   page_icon="recursos/dfc_logo.png")
-marca.estilos()
-marca.cabecera("Asignación de horas",
-               "Vacancia, prelación y dictámenes del concurso cerrado.",
-               "Comisión Dictaminadora Interna")
+st.set_page_config(page_title="Asignación de horas · DFC", layout="wide")
 
 # ---------------------------------------------------------------------------
 # Reglas del proceso
@@ -46,6 +42,99 @@ LEYENDA_DESIERTA = ("La presente convocatoria se declara DESIERTA al no haberse 
                     "horas a ningún participante.")
 
 VACIOS = ("", "nan", "none", "n/a", "na", "#n/a", "-", "s/d", "sd")
+
+
+
+# ---------------------------------------------------------------------------
+# Identidad visual
+# ---------------------------------------------------------------------------
+
+RECURSOS = pathlib.Path(__file__).parent / "recursos"
+NARANJA, NARANJA_CLARO, CIAN = "#F2720C", "#FF9A3C", "#22C7F0"
+TINTA, SUAVE, LINEA = "#1B2432", "#6B7688", "#E3E6EC"
+
+
+@st.cache_data(show_spinner=False)
+def _imagen(nombre):
+    """Streamlit no sirve rutas locales dentro de <img>: el PNG se embebe en base64."""
+    ruta = RECURSOS / nombre
+    return base64.b64encode(ruta.read_bytes()).decode() if ruta.exists() else ""
+
+
+def identidad():
+    st.markdown("""
+<style>
+  .stApp {
+      background:
+        radial-gradient(1100px 380px at 10% -6%, #FFF1E4 0%, rgba(255,241,228,0) 58%),
+        radial-gradient(900px 340px at 92% -4%, #E9F8FD 0%, rgba(233,248,253,0) 52%),
+        #FBFAF8;
+  }
+  /* Espacio suficiente para que el título no quede debajo de la barra de Streamlit */
+  .block-container { padding-top: 3.2rem; max-width: 1180px; }
+
+  /* ---- logotipo en la barra lateral ---- */
+  .marco-logo { position: relative; width: 100%; margin: 0 0 6px; }
+  .capa { width: 100%; display: block; }
+  /* La capa de LED se encima en la misma posición y parpadea; la opacidad baja
+     pero nunca a cero, así los diodos se atenúan en vez de apagarse. */
+  .capa-leds { position: absolute; top: 0; left: 0;
+               animation: destello 2.6s ease-in-out infinite; }
+  @keyframes destello {
+      0%, 100% { opacity: 1;   filter: brightness(1.5) drop-shadow(0 0 6px #22C7F0); }
+      45%, 55% { opacity: .3;  filter: brightness(.85); }
+  }
+  @media (prefers-reduced-motion: reduce) { .capa-leds { animation: none; } }
+  .pie-marca { color: #6B7688; font-size: .76rem; text-align: center;
+               letter-spacing: .4px; margin: 0 0 14px; }
+
+  /* ---- encabezado ---- */
+  .titulo { font-size: 1.7rem; font-weight: 700; color: #1B2432;
+            letter-spacing: -.4px; margin: 0; }
+  .bajada { color: #6B7688; font-size: .95rem; margin: 4px 0 0; }
+  .proceso { display: inline-block; margin: 10px 0 4px; padding: 4px 12px;
+             border-radius: 999px; font-size: .72rem; font-weight: 700;
+             letter-spacing: .6px; text-transform: uppercase; color: #8A3B00;
+             background: linear-gradient(90deg,#FFE2C7,#FFF0DF);
+             border: 1px solid #FFD2AC; }
+
+  /* ---- pestañas, indicadores, botones ---- */
+  .stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid #E3E6EC; }
+  .stTabs [data-baseweb="tab"] { height: 44px; padding: 0 18px; font-weight: 600;
+                                 color: #6B7688; background: transparent; }
+  .stTabs [aria-selected="true"] { color: #F2720C; }
+  .stTabs [data-baseweb="tab-highlight"] { background: #F2720C; height: 3px; }
+  div[data-testid="stMetric"] { background:#fff; border:1px solid #E3E6EC;
+      border-radius:12px; padding:14px 18px; box-shadow:0 1px 2px rgba(27,36,50,.05); }
+  div[data-testid="stMetric"] [data-testid="stMetricValue"] { color:#F2720C; font-weight:700; }
+  .stButton > button, .stDownloadButton > button { border-radius:9px; font-weight:600; }
+  .stButton > button[kind="primary"] {
+      background: linear-gradient(135deg,#F2720C,#FF9A3C); border:0; color:#fff; }
+  .stDownloadButton > button { width:100%; text-align:left; }
+  section[data-testid="stSidebar"] { background:#fff; border-right:1px solid #E3E6EC; }
+  section[data-testid="stSidebar"] h2 { font-size:.76rem; text-transform:uppercase;
+      letter-spacing:.8px; color:#F2720C; margin-top:1.1rem; }
+  .tarjeta { background:#fff; border:1px solid #E3E6EC; border-left:3px solid #F2720C;
+             border-radius:10px; padding:12px 16px; margin-bottom:10px; }
+  .tarjeta span { color:#6B7688; font-size:.88rem; }
+</style>
+""", unsafe_allow_html=True)
+
+
+def logotipo():
+    """Logotipo con sus LED parpadeando, arriba de la barra lateral."""
+    base, leds = _imagen("dfc_logo.png"), _imagen("dfc_leds.png")
+    if not base:
+        # Falla a la vista, no en silencio: así se sabe qué archivo falta.
+        st.sidebar.warning("No encuentro recursos/dfc_logo.png junto a app.py.")
+        return
+    capas = '<img src="data:image/png;base64,%s" class="capa">' % base
+    if leds:
+        capas += '<img src="data:image/png;base64,%s" class="capa capa-leds">' % leds
+    st.sidebar.markdown(
+        '<div class="marco-logo">%s</div>'
+        '<p class="pie-marca">Comisión Dictaminadora Interna</p>' % capas,
+        unsafe_allow_html=True)
 
 
 def limpiar(v):
@@ -190,7 +279,10 @@ def asignado_por_clave(id_clave):
 # Barra lateral: archivos y parámetros
 # ---------------------------------------------------------------------------
 
+identidad()
+
 with st.sidebar:
+    logotipo()
     st.header("Archivos")
     f_vac = st.file_uploader("Excel de vacancia", type="xlsx")
     f_pre = st.file_uploader("Excel de prelación", type="xlsx")
@@ -224,6 +316,11 @@ try:
 except ValueError as e:
     st.error(str(e))
     st.stop()
+
+st.markdown('<p class="titulo">Asignación de horas</p>'
+            '<p class="bajada">Vacancia, prelación y dictámenes del concurso cerrado.</p>'
+            '<div class="proceso">Incremento de horas %s</div>' % anio,
+            unsafe_allow_html=True)
 
 t_datos, t_prel, t_asig, t_sal = st.tabs(
     ["Datos", "Prelación", "Asignación", "Salidas"])
