@@ -405,61 +405,107 @@ with t_prel:
 
 with t_asig:
     convocatorias = list(dict.fromkeys(vac["CONVOCATORIA"]))
-    etiquetas = []
+
+    # Tabla completa en lugar de un desplegable: se ven todas las convocatorias a
+    # la vez, con el desglose de categorías y horas que siguen libres en cada una.
+    resumen = []
     for c in convocatorias:
         sub = vac[vac["CONVOCATORIA"] == c]
-        libre = sum(int(r["hrs"]) - asignado_por_clave(r["id_clave"]) for _, r in sub.iterrows())
-        etiquetas.append("%s — %d hrs libres de %d" % (c, libre, int(sub["hrs"].sum())))
-
-    elegida = st.selectbox("Convocatoria", range(len(convocatorias)),
-                           format_func=lambda i: etiquetas[i])
-    conv = convocatorias[elegida]
-    sub = vac[vac["CONVOCATORIA"] == conv]
-
-    st.write("**%s** · %s" % (sub.iloc[0].get("Sustituido", ""),
-                              sub.iloc[0].get("Motivo Baja", "")))
-
-    opciones = []
-    for _, r in sub.iterrows():
-        libre = int(r["hrs"]) - asignado_por_clave(r["id_clave"])
-        opciones.append((r["id_clave"], "%s · %s · %d de %d hrs libres"
-                         % (r["Clave"], r["Categoria"], libre, int(r["hrs"])), libre, r))
-
-    c1, c2, c3 = st.columns([3, 2, 1])
-    idx = c1.selectbox("Clave presupuestal", range(len(opciones)),
-                       format_func=lambda i: opciones[i][1])
-    id_clave, _, libre_clave, fila_clave = opciones[idx]
-
-    # Los asesores se ofrecen en orden de prelación, con su cupo ya calculado.
-    disponibles = []
-    for _, r in pre.iterrows():
-        cupo, motivo = cupo_de(r, estado()["base_manual"], estado()["renuncias"],
-                               asignado_por_rfc(r["rfc"]))
-        disponibles.append((r, cupo, motivo))
-
-    quien = c2.selectbox(
-        "Asesor (en orden de prelación)", range(len(disponibles)),
-        format_func=lambda i: "%d. %s — puede tomar %d%s"
-        % (disponibles[i][0]["prelacion"], disponibles[i][0]["nombre"],
-           disponibles[i][1], " · " + disponibles[i][2] if disponibles[i][2] else ""))
-    asesor, cupo_asesor, motivo = disponibles[quien]
-
-    tope = int(min(libre_clave, cupo_asesor))
-    horas = c3.number_input("Horas", 0, max(tope, 0), max(tope, 0) if tope > 0 else 0)
-
-    if tope <= 0:
-        st.warning("No hay horas que asignar aquí: la clave tiene %d libres y el asesor "
-                   "puede tomar %d. %s" % (libre_clave, cupo_asesor, motivo))
-    elif st.button("Asignar", type="primary"):
-        estado()["asignaciones"].append({
-            "convocatoria": conv, "id_clave": id_clave,
-            "clave": fila_clave["Clave"], "categoria": fila_clave["Categoria"],
-            "hrs": int(horas), "rfc": asesor["rfc"], "nombre": asesor["nombre"],
-            "categoria_actual": asesor["puesto"], "puntaje": asesor["puntaje"],
-            "clave_actual": asesor["plaza"], "prelacion": int(asesor["prelacion"]),
-            "horas_actuales": asesor["horas_asesor"],
+        total = int(sub["hrs"].sum())
+        por_categoria = {}
+        for _, r in sub.iterrows():
+            queda = int(r["hrs"]) - asignado_por_clave(r["id_clave"])
+            if queda > 0:
+                cat = r["Categoria"].replace("HORAS DE ", "")
+                por_categoria[cat] = por_categoria.get(cat, 0) + queda
+        libre = sum(por_categoria.values())
+        resumen.append({
+            "Convocatoria": c,
+            "Disponible por categoría": " · ".join(
+                "%d hrs %s" % (h, cat) for cat, h in por_categoria.items()) or "—",
+            "Libres": libre,
+            "Total": total,
+            "Claves": len(sub),
+            "Estado": "Sin asignar" if libre == total else
+                      ("Agotada" if libre == 0 else "Parcial"),
+            "Vacante de": sub.iloc[0].get("Sustituido", ""),
         })
-        st.rerun()
+    tabla = pd.DataFrame(resumen)
+
+    c1, c2 = st.columns([2, 3])
+    solo_libres = c1.checkbox("Solo las que tienen horas libres", True)
+    categorias = sorted({r["Categoria"].replace("HORAS DE ", "") for _, r in vac.iterrows()})
+    filtro_cat = c2.multiselect("Filtrar por categoría disponible", categorias)
+
+    vista = tabla[tabla["Libres"] > 0] if solo_libres else tabla
+    if filtro_cat:
+        vista = vista[vista["Disponible por categoría"].apply(
+            lambda t: any(cat in t for cat in filtro_cat))]
+
+    st.caption("Haz clic en el renglón de la convocatoria que vas a asignar. "
+               "La lupa de la tabla busca por folio, categoría o nombre.")
+    seleccion = st.dataframe(
+        vista, hide_index=True, use_container_width=True, height=330,
+        on_select="rerun", selection_mode="single-row",
+        column_config={
+            "Libres": st.column_config.NumberColumn("Libres", width="small"),
+            "Total": st.column_config.NumberColumn("Total", width="small"),
+            "Claves": st.column_config.NumberColumn("Claves", width="small"),
+        })
+
+    elegidas = seleccion.selection.rows
+    if not elegidas:
+        st.info("Selecciona una convocatoria en la tabla para asignarle horas.")
+    else:
+        conv = vista.iloc[elegidas[0]]["Convocatoria"]
+        sub = vac[vac["CONVOCATORIA"] == conv]
+        base = sub.iloc[0]
+        st.markdown('<div class="tarjeta"><b>%s</b><br><span>%s · %s</span></div>'
+                    % (conv, base.get("Sustituido", ""), base.get("Motivo Baja", "")),
+                    unsafe_allow_html=True)
+
+        opciones = []
+        for _, r in sub.iterrows():
+            libre = int(r["hrs"]) - asignado_por_clave(r["id_clave"])
+            opciones.append((r["id_clave"], "%s · %s · %d de %d hrs libres"
+                             % (r["Clave"], r["Categoria"].replace("HORAS DE ", ""),
+                                libre, int(r["hrs"])), libre, r))
+
+        c1, c2, c3 = st.columns([3, 2, 1])
+        idx = c1.selectbox("Clave presupuestal y categoría", range(len(opciones)),
+                           format_func=lambda i: opciones[i][1])
+        id_clave, _, libre_clave, fila_clave = opciones[idx]
+
+        # Los asesores se ofrecen en orden de prelación, con su cupo ya calculado.
+        disponibles = []
+        for _, r in pre.iterrows():
+            cupo, motivo = cupo_de(r, estado()["base_manual"], estado()["renuncias"],
+                                   asignado_por_rfc(r["rfc"]))
+            disponibles.append((r, cupo, motivo))
+
+        quien = c2.selectbox(
+            "Asesor (en orden de prelación)", range(len(disponibles)),
+            format_func=lambda i: "%d. %s — puede tomar %d%s"
+            % (disponibles[i][0]["prelacion"], disponibles[i][0]["nombre"],
+               disponibles[i][1], " · " + disponibles[i][2] if disponibles[i][2] else ""))
+        asesor, cupo_asesor, motivo = disponibles[quien]
+
+        tope = int(min(libre_clave, cupo_asesor))
+        horas = c3.number_input("Horas", 0, max(tope, 0), max(tope, 0) if tope > 0 else 0)
+
+        if tope <= 0:
+            st.warning("No hay horas que asignar aquí: la clave tiene %d libres y el "
+                       "asesor puede tomar %d. %s" % (libre_clave, cupo_asesor, motivo))
+        elif st.button("Asignar", type="primary"):
+            estado()["asignaciones"].append({
+                "convocatoria": conv, "id_clave": id_clave,
+                "clave": fila_clave["Clave"], "categoria": fila_clave["Categoria"],
+                "hrs": int(horas), "rfc": asesor["rfc"], "nombre": asesor["nombre"],
+                "categoria_actual": asesor["puesto"], "puntaje": asesor["puntaje"],
+                "clave_actual": asesor["plaza"], "prelacion": int(asesor["prelacion"]),
+                "horas_actuales": asesor["horas_asesor"],
+            })
+            st.rerun()
 
     st.subheader("Asignaciones registradas")
     if not estado()["asignaciones"]:
@@ -468,8 +514,9 @@ with t_asig:
         for i, a in enumerate(estado()["asignaciones"]):
             c1, c2 = st.columns([8, 1])
             c1.markdown('<div class="tarjeta"><b>%s</b> · %d hrs<br>'
-                        '<span>%s · %s</span></div>'
-                        % (a["nombre"], a["hrs"], a["convocatoria"], a["clave"]),
+                        '<span>%s · %s · %s</span></div>'
+                        % (a["nombre"], a["hrs"], a["convocatoria"], a["clave"],
+                           a["categoria"].replace("HORAS DE ", "")),
                         unsafe_allow_html=True)
             if c2.button("Quitar", key="del_%d" % i):
                 estado()["asignaciones"].pop(i)
