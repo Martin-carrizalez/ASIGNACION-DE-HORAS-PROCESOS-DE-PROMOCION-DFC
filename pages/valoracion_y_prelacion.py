@@ -7,9 +7,8 @@ Dos etapas, las que siguen vigentes del calendario de la Base SÉPTIMA:
                  documento por documento.
   2. PRELACIÓN   — orden final y exportación que alimenta el sistema de asignación.
 
-La recepción (7 al 21 de octubre) cerró, así que sus dos pestañas se retiraron.
-Los participantes se leen de la pestaña PARTICIPANTES tal como quedó; esta
-página ya no la escribe.
+Los participantes se dan de alta a mano desde la barra lateral, con nombre y
+R.F.C.; con eso se arma la lista. No se carga nada de procesos anteriores.
 
 Persistencia: Google Sheets (gspread + cuenta de servicio en st.secrets), mismo
 patrón que el resto de las apps del área. No se guarda nada en el repositorio.
@@ -32,7 +31,6 @@ import re
 import sys
 import unicodedata
 from datetime import datetime
-from difflib import get_close_matches
 
 import gspread
 import pandas as pd
@@ -323,15 +321,6 @@ def actualizar_participante(folio, registro):
     return False
 
 
-def escribir_participantes(registros):
-    """Reescribe PARTICIPANTES completo en una sola petición."""
-    hoja, valores = _hoja("PARTICIPANTES")
-    cabecera = visibles("PARTICIPANTES")
-    _escribir_encima(hoja,
-                     [cabecera] + [_renglon("PARTICIPANTES", r) for r in registros],
-                     len(valores), len(cabecera))
-
-
 def completar_identidad(df_participantes):
     """
     Deja el R.F.C. y el Nombre de PUNTAJES iguales a los de PARTICIPANTES.
@@ -399,6 +388,17 @@ def publicar_concentrado(tabla):
     return len(tabla)
 
 
+def avisar(mensaje):
+    """
+    Deja el aviso para DESPUÉS de recargar la pantalla.
+
+    st.success() seguido de st.rerun() no se alcanza a dibujar: el rerun
+    descarta la pantalla a medio pintar. Por eso el mensaje se guarda y se
+    muestra al principio de la pasada siguiente.
+    """
+    st.session_state["aviso"] = mensaje
+
+
 def ahora():
     return datetime.now(TZ).strftime("%d/%m/%Y %H:%M")
 
@@ -408,48 +408,6 @@ def normalizar(texto):
     t = unicodedata.normalize("NFKD", str(texto))
     t = "".join(c for c in t if not unicodedata.combining(c))
     return re.sub(r"\s+", " ", t).strip().lower()
-
-
-def es_numero(v):
-    try:
-        float(str(v).replace(",", ""))
-        return True
-    except (TypeError, ValueError):
-        return False
-
-
-# Traducción exacta de los textos de la hoja "Opciones" del formato 2025 a los
-# conceptos del tabulador. No se deja al parecido: las etiquetas del Reglamento
-# ("Doctorado en Educación con antecedente de Maestría (titulado)") y las del
-# formato ("Doctorado en Educación") no se parecen lo suficiente, y un grado mal
-# emparejado le mueve los puntos a alguien.
-EQUIVALENCIAS_2025 = {
-    "licenciatura en educacion": "LIC_EDU",
-    "maestria en educacion": "MAE_EDU",
-    "doctorado en educacion": "DOC_EDU",
-    "licenciatura no relacionada con educacion": "LIC_OTR",
-    "maestria no relacionada con educacion": "MAE_OTR",
-    "doctorado no relacionado con educacion": "DOC_OTR",
-}
-SIN_GRADO = {"", "ninguno", "documento sin valor", "sin valor", "nan", "0"}
-
-
-def emparejar_concepto(texto, nombres_por_clave, corte=0.80):
-    """
-    Traduce el texto del archivo de precarga al concepto del tabulador.
-    Devuelve None si no hay una coincidencia clara: más vale dejarlo en blanco
-    y capturarlo a mano que precargar un grado equivocado.
-    """
-    objetivo = normalizar(texto)
-    if objetivo in SIN_GRADO:
-        return None
-    if objetivo in EQUIVALENCIAS_2025:
-        return EQUIVALENCIAS_2025[objetivo]
-    normalizados = {normalizar(v): k for k, v in nombres_por_clave.items()}
-    if objetivo in normalizados:
-        return normalizados[objetivo]
-    parecidos = get_close_matches(objetivo, list(normalizados), n=1, cutoff=corte)
-    return normalizados[parecidos[0]] if parecidos else None
 
 
 # =========================================================================
@@ -555,22 +513,10 @@ def _opciones_legibles():
 
 OPCIONES = _opciones_legibles()
 DE_OPCION = {v: k for k, v in OPCIONES.items()}
-NADA = "— no precargar —"
 
 # Para el Sheet: el nombre del concepto y el apartado al que pertenece.
 ETIQUETA = {c.clave: c.etiqueta.strip() for f in tb.FACTORES for c in f.conceptos}
 APARTADO_DE = {c.clave: f.etiqueta for f in tb.FACTORES for c in f.conceptos}
-
-# Lo único que se arrastra de Recategorización 2025: el grado académico y los
-# años de servicio. Todo lo demás vuelve a cero por la Base PRIMERA.5.
-_FACTORES_A = CUADRO[0][1]            # los que componen a) Formación académica
-CONCEPTOS_FORMACION = [c for f in tb.FACTORES if f.clave in _FACTORES_A
-                       for c in f.conceptos]
-_FACTOR_ANTIG = next((f for f in tb.FACTORES if f.clave == "ANTIGUEDAD"), None)
-CONCEPTO_ANIO = (_FACTOR_ANTIG.conceptos[0]
-                 if _FACTOR_ANTIG and _FACTOR_ANTIG.conceptos else None)
-CLAVES_PRECARGA = {c.clave for c in CONCEPTOS_FORMACION} | (
-    {CONCEPTO_ANIO.clave} if CONCEPTO_ANIO else set())
 
 
 def cantidad_de(valor, por_defecto=1.0):
@@ -688,6 +634,10 @@ st.title("Valoración y prelación · Incremento de Horas 2026")
 st.caption("Comisión Dictaminadora Interna · Dirección de Formación Continua y CEPD · "
            "Valoración del 22 al 28 de octubre de 2026")
 
+# Aviso de la operación anterior, que se guardó antes de recargar la pantalla.
+if st.session_state.get("aviso"):
+    st.success(st.session_state.pop("aviso"))
+
 # Quién captura: queda asentado en cada renglón para efectos de auditoría,
 # porque el oficio CDESE/017/2026 pide un concentrado del proceso.
 capturo = st.sidebar.text_input("Captura (nombre de quien registra)", key="capturo")
@@ -718,15 +668,8 @@ _con_puntos = df_punt[df_punt["sin_valor"].astype(str).str.strip() == ""] \
 st.sidebar.metric("Expedientes valorados",
                   _con_puntos["folio"].nunique() if not _con_puntos.empty else 0)
 
-# La precarga es cosa de una vez; estorbaba arriba de la captura. Vive al
-# final de la barra lateral y sólo toma la pantalla cuando hay archivo puesto.
-st.sidebar.divider()
-st.sidebar.markdown("##### Precarga de Recategorización 2025")
-st.sidebar.caption("Sólo al inicio del proceso. Da de alta a los participantes "
-                   "y escribe los incisos a) y c).")
-archivo = st.sidebar.file_uploader("Precarga_Incremento_2026.xlsx", type="xlsx",
-                                   key="archivo_precarga")
-
+# El alta vive en la barra lateral para no estorbar en la captura: se usa
+# conforme van llegando los expedientes, no de una sola vez.
 # PUNTAJES copia el R.F.C. y el nombre de cada participante para que el Sheet
 # se lea solo. Si en PARTICIPANTES se corrigió un nombre, aquí se refleja.
 if not df_punt.empty and not df_part.empty:
@@ -763,190 +706,86 @@ if not df_punt.empty:
         if cant:
             puntaje_de[folio_p] = tb.desglose(cant)["TOTAL"]
 
-tab_val, tab_pre = st.tabs(["1 · Valoración", "2 · Prelación"])
+tab_reg, tab_val, tab_pre = st.tabs(
+    ["1 · Registro", "2 · Valoración", "3 · Prelación"])
 
 
-# --- 1. VALORACIÓN --------------------------------------------------------
+# --- 1. REGISTRO ----------------------------------------------------------
+with tab_reg:
+    st.subheader("Registro de participantes")
+    st.caption("La lista se arma a mano, conforme se reciben los expedientes. "
+               "No se carga nada de procesos anteriores.")
+
+    with st.form("alta_participante", clear_on_submit=True):
+        c1, c2 = st.columns([3, 2])
+        nuevo_nombre = c1.text_input("Nombre completo *")
+        nuevo_rfc = c2.text_input("R.F.C. con homoclave *")
+        dar_alta = st.form_submit_button("Dar de alta", type="primary")
+
+    if dar_alta:
+        nombre_alta = " ".join(str(nuevo_nombre).split()).upper()
+        rfc_alta = str(nuevo_rfc).strip().upper()
+        rfcs = {normalizar(r) for r in df_part["rfc"]} if not df_part.empty else set()
+        if not nombre_alta or not rfc_alta:
+            st.error("Faltan el nombre y el R.F.C.")
+        elif not capturo.strip():
+            st.error("Anota en la barra lateral quién está capturando.")
+        elif len(rfc_alta) not in (12, 13):
+            # 13 para persona física, 12 para moral. Un R.F.C. mal escrito es
+            # lo único que después no se corrige sin rehacer el expediente.
+            st.error("El R.F.C. tiene %d caracteres; deben ser 13." % len(rfc_alta))
+        elif normalizar(rfc_alta) in rfcs:
+            ya = df_part.loc[df_part["rfc"].map(normalizar) == normalizar(rfc_alta),
+                             "nombre"].iloc[0]
+            st.error("Ese R.F.C. ya está registrado: %s" % ya)
+        else:
+            try:
+                agregar_varios("PARTICIPANTES", [{
+                    "folio": siguiente_folio(df_part),
+                    "fecha_recepcion": ahora(), "nombre": nombre_alta,
+                    "rfc": rfc_alta, "estatus": ESTATUS[0], "no_expediente": "",
+                    "capturo": capturo.strip(), "actualizado": ahora()}])
+            except Exception as err:
+                st.error("No se pudo dar de alta: %s" % err)
+            else:
+                olvidar_lo_leido()
+                avisar("%s dado(a) de alta. Ya aparece en la pestaña de "
+                       "Valoración." % nombre_alta)
+                st.rerun()
+
+    st.divider()
+    if df_part.empty:
+        st.info("Todavía no hay nadie registrado.")
+    else:
+        registro = pd.DataFrame({
+            "Folio": df_part["folio"],
+            "No. de expediente": df_part["no_expediente"],
+            "Nombre del participante": df_part["nombre"],
+            "R.F.C.": df_part["rfc"],
+            "Estatus": df_part["estatus"],
+            "Capturó": df_part["capturo"],
+            "Fecha de registro": df_part["fecha_recepcion"],
+        }).sort_values("Nombre del participante")
+        st.dataframe(registro, width="stretch", hide_index=True)
+        st.caption("%d participante(s) registrados. El nombre se corrige en la "
+                   "pestaña PARTICIPANTES del Sheet; la app baja la corrección "
+                   "sola a los renglones de puntaje." % len(registro))
+
+
+# --- 2. VALORACIÓN --------------------------------------------------------
 with tab_val:
     st.subheader("Valoración conforme al Tabulador de Factores y Puntajes")
     st.caption("Título Octavo, Art. 43 del Reglamento. Sólo se valoran actividades "
                "posteriores a la última promoción (Base PRIMERA.5).")
 
-    # --- Precarga desde el archivo Precarga_Incremento_2026.xlsx -----------
-    # Ese archivo sale de las hojas individuales de Recategorización 2025 y lo
-    # revisa la Comisión antes de subirlo. Aquí sólo se escribe lo que trae.
-    #
-    # Se arrastran a) Formación académica y c) Antigüedad, y nada más: la Base
-    # PRIMERA.5 excluye las constancias de actualización, experiencia,
-    # producción académica y laboral ya presentadas en recategorización.
-    #
-    # Siempre abierto: es la única puerta de alta de participantes, porque la
-    # pestaña de Recepción ya no existe. Plegado no se ve y no se encuentra.
-    if archivo is not None:
-        st.markdown("#### Precarga de Recategorización 2025")
-        st.caption("Da de alta a los participantes que falten (empareja por "
-                   "R.F.C.) y escribe los incisos a) Formación académica y "
-                   "c) Antigüedad. Los apartados b) a g) no se tocan. "
-                   "Quita el archivo de la barra lateral para volver a capturar.")
-
-        if CONCEPTO_ANIO is None:
-            st.error("tabulador.py no expone un concepto de antigüedad; no puedo "
-                     "precargar el inciso c).")
-        elif archivo is not None:
-            try:
-                hoja = pd.read_excel(archivo, sheet_name="Precarga").fillna("")
-            except Exception as err:
-                st.error("No pude leer la hoja «Precarga»: %s" % err)
-                hoja = pd.DataFrame()
-
-            faltan = [c for c in ("Nombre completo", "R.F.C.") if c not in hoja.columns]
-            if faltan:
-                st.error("Al archivo le faltan columnas: " + ", ".join(faltan))
-            elif not hoja.empty:
-                por_rfc = {normalizar(r): f for f, r
-                           in zip(df_part["folio"], df_part["rfc"])}
-                propuesta = []
-                for _, r in hoja.iterrows():
-                    rfc = str(r["R.F.C."]).strip().upper()
-                    if not rfc:
-                        continue
-                    grado = emparejar_concepto(r.get("Estudios en educación"), NOMBRE)
-                    otros = emparejar_concepto(r.get("Otros estudios"), NOMBRE)
-                    anios = r.get("Años de servicio 2026")
-                    # El nombre bueno es el del expediente de 2025: la lista de
-                    # registro trae nombres incompletos ("DULCE JOSEFINA").
-                    nombre = str(r.get("Nombre en el expediente 2025") or "").strip() \
-                        or str(r["Nombre completo"]).strip()
-                    propuesta.append({
-                        "Cargar": True,
-                        "Nombre": nombre.upper(),
-                        "Como se registró": str(r["Nombre completo"]).strip(),
-                        "R.F.C.": rfc,
-                        "Horas solicitadas": r.get("Horas solicitadas", ""),
-                        "Ya está": "Sí" if normalizar(rfc) in por_rfc else "",
-                        "Estudios en educación": OPCIONES[grado] if grado else NADA,
-                        "Otros estudios": OPCIONES[otros] if otros else NADA,
-                        "Años de servicio": float(anios) if es_numero(anios) else 0.0,
-                        "Del archivo": " / ".join(
-                            str(x) for x in [r.get("Estudios en educación"),
-                                             r.get("Otros estudios"), anios] if str(x).strip()),
-                    })
-
-                sin_leer = [p["Nombre"] for p in propuesta
-                            if p["Estudios en educación"] == NADA
-                            and p["Otros estudios"] == NADA]
-                if sin_leer:
-                    st.warning("%d participante(s) sin grado identificado: %s. Se dan "
-                               "de alta igual y su formación se captura a mano."
-                               % (len(sin_leer), ", ".join(sin_leer[:5])
-                                  + (", …" if len(sin_leer) > 5 else "")))
-
-                opciones_grado = [NADA] + [OPCIONES[c.clave] for c in CONCEPTOS_FORMACION]
-                # El botón va ARRIBA de la tabla: con 42 renglones debajo, puesto al
-                # final había que recorrer toda la hoja para encontrarlo.
-                cargar = st.button("Cargar en el Sheet", type="primary",
-                                   key="bprecarga", width="stretch")
-                st.caption("Revisa la tabla de abajo antes de presionar. Da de alta a "
-                           "quien falte y corrige el nombre de quien ya esté.")
-
-                revisado = st.data_editor(
-                    pd.DataFrame(propuesta), width="stretch", hide_index=True,
-                    key="rev_precarga",
-                    column_config={
-                        "Cargar": st.column_config.CheckboxColumn("Cargar"),
-                        "Nombre": st.column_config.TextColumn(
-                            "Nombre (como va a quedar)", width="large"),
-                        "Como se registró": st.column_config.TextColumn(
-                            "Como se registró", disabled=True, width="medium"),
-                        "Ya está": st.column_config.TextColumn(
-                            "Ya registrado", disabled=True, width="small"),
-                        "Estudios en educación": st.column_config.SelectboxColumn(
-                            "Estudios en educación", options=opciones_grado, width="large"),
-                        "Otros estudios": st.column_config.SelectboxColumn(
-                            "Otros estudios", options=opciones_grado, width="large"),
-                        "Años de servicio": st.column_config.NumberColumn(
-                            "Años de servicio", min_value=0.0, step=1.0),
-                        "Del archivo": st.column_config.TextColumn(
-                            "Leído del archivo", disabled=True, width="large"),
-                    })
-
-                if cargar:
-                    if not capturo.strip():
-                        st.error("Anota en la barra lateral quién está capturando.")
-                    else:
-                        # Todo se arma en memoria y se escribe de un solo viaje.
-                        # Una llamada por participante son más de cien peticiones
-                        # seguidas y Google corta a las 60 escrituras por minuto.
-                        # PARTICIPANTES se reescribe completo en una sola
-                        # petición: así se corrige de paso el nombre de quien
-                        # ya estaba dado de alta con el nombre incompleto de
-                        # la lista de registro.
-                        por_folio = {r["folio"]: dict(r)
-                                     for _, r in df_part.iterrows()}
-                        orden_actual = list(df_part["folio"])
-                        renglones_puntajes = []
-                        folios_tocados = []
-                        nuevos_folios = []
-                        altas = renombrados = 0
-
-                        for r in revisado.to_dict("records"):
-                            if not r["Cargar"]:
-                                continue
-                            rfc = str(r["R.F.C."]).strip().upper()
-                            nombre = str(r["Nombre"]).strip().upper()
-                            folio = por_rfc.get(normalizar(rfc))
-                            if folio is None:
-                                # Alta mínima. El número de expediente queda en
-                                # blanco a propósito: lo pone la Comisión al
-                                # revisar, en el orden que ella decida.
-                                folio = siguiente_folio(df_part, nuevos_folios)
-                                nuevos_folios.append(folio)
-                                orden_actual.append(folio)
-                                por_folio[folio] = {
-                                    "folio": folio, "fecha_recepcion": ahora(),
-                                    "nombre": nombre, "rfc": rfc,
-                                    "estatus": ESTATUS[0],
-                                    "horas_solicitadas": r.get("Horas solicitadas", ""),
-                                    "no_expediente": "",
-                                    "capturo": capturo.strip(),
-                                    "actualizado": ahora()}
-                                altas += 1
-                            elif nombre and por_folio[folio].get("nombre") != nombre:
-                                por_folio[folio]["nombre"] = nombre
-                                por_folio[folio]["actualizado"] = ahora()
-                                renombrados += 1
-
-                        try:
-                            if altas or renombrados:
-                                escribir_participantes(
-                                    [por_folio[f] for f in orden_actual])
-                            if folios_tocados:
-                                # Conserva lo capturado de los demás apartados y
-                                # reemplaza sólo los renglones de a) y c).
-                                reemplazar_varios_folios(
-                                    "PUNTAJES", folios_tocados, renglones_puntajes,
-                                    conceptos=CLAVES_PRECARGA)
-                        except Exception as err:
-                            st.error("No se pudo escribir en el Sheet: %s" % err)
-                        else:
-                            olvidar_lo_leido()
-                            st.success(
-                                "%d participante(s) procesados · %d dados de alta · "
-                                "%d con el nombre corregido · %d renglón(es) de "
-                                "puntaje escritos. El número de expediente queda "
-                                "en blanco: se asigna al revisar."
-                                % (len(folios_tocados), altas, renombrados,
-                                   len(renglones_puntajes)))
-                            st.rerun()
+    if df_part.empty:
+        st.info("Todavía no hay participantes registrados. Dalos de alta en la "
+                "pestaña 1 · Registro.")
 
 
     # st.stop() aquí dentro detendría el script completo y dejaría la pestaña
     # de Prelación en blanco sin explicación. Se salta sólo esta sección.
-    hay_gente = not df_part.empty and archivo is None
-    if df_part.empty:
-        st.info("Todavía no hay participantes registrados. Sube el archivo de "
-                "precarga aquí arriba para darlos de alta; de ahí en adelante "
-                "aparecen en esta lista.")
+    hay_gente = not df_part.empty
 
 if hay_gente:
     with tab_val:
@@ -954,9 +793,9 @@ if hay_gente:
         # de expediente, porque lo asigna la Comisión conforme revisa.
         orden_alfabetico = df_part.sort_values("nombre")["folio"].tolist()
 
-        # Valorado NO es "tiene puntos": la precarga le puso formación y
-        # antigüedad a los 42. Valorado es que la Comisión ya revisó el
-        # expediente, y eso se sabe porque le asignó número de expediente.
+        # Revisado no es "tiene puntos": alguien puede tener documentos a
+        # medio capturar. Revisado es que la Comisión cerró el expediente, y
+        # eso se sabe porque le asignó número de expediente.
         expediente_de = {f: str(n).strip() for f, n
                          in zip(df_part["folio"], df_part["no_expediente"])
                          if str(n).strip()}
@@ -972,14 +811,14 @@ if hay_gente:
             else:
                 partes.append("PENDIENTE")
                 if f in puntaje_de:
-                    partes.append("precargado %g pts" % puntaje_de[f])
+                    partes.append("%g pts capturados" % puntaje_de[f])
             return "  ·  ".join(partes)
 
         hechos = sum(1 for f in orden_alfabetico if f in expediente_de)
         st.caption("Revisados **%d de %d**. ✔ es expediente al que la Comisión "
-                   "ya le asignó número; PENDIENTE es el que falta. Lo que dice "
-                   "«precargado» son los puntos que trajo de Recategorización "
-                   "2025, todavía sin revisar." % (hechos, len(orden_alfabetico)))
+                   "ya le asignó número; PENDIENTE es el que falta. Los puntos "
+                   "de un PENDIENTE son lo que lleve capturado hasta ahora."
+                   % (hechos, len(orden_alfabetico)))
 
         folio_v = st.selectbox("Participante a valorar", orden_alfabetico,
                                format_func=_rotulo_participante, key="folio_val")
@@ -1003,7 +842,8 @@ if hay_gente:
                 fila_v["actualizado"] = ahora()
                 actualizar_participante(folio_v, fila_v)
                 olvidar_lo_leido()
-                st.success("Expediente %s asignado." % exp_nuevo.strip())
+                avisar("Expediente %s asignado a %s."
+                       % (exp_nuevo.strip(), fila_v.get("nombre", "")))
                 st.rerun()
 
         st.info("Un renglón por documento. En **Detalle** escribe el nombre de la "
@@ -1137,12 +977,12 @@ if hay_gente:
                                 "capturo": capturo.strip(), "actualizado": ahora()})
                 reemplazar_por_folio("PUNTAJES", folio_v, registros)
                 olvidar_lo_leido()
-                st.success(f"Valoración guardada: {len(registros)} documento(s), "
-                           f"{desg['TOTAL']} puntos.")
+                avisar("Valoración de %s guardada: %d documento(s), %g puntos."
+                       % (fila_v.get("nombre", ""), len(registros), desg["TOTAL"]))
                 st.rerun()
 
 
-# --- 2. PRELACIÓN ---------------------------------------------------------
+# --- 3. PRELACIÓN ---------------------------------------------------------
 with tab_pre:
     st.subheader("Lista de prelación")
     st.caption("Orden por puntaje total; desempate por formación académica y, en segundo "
