@@ -334,12 +334,14 @@ def escribir_participantes(registros):
 
 def completar_identidad(df_participantes):
     """
-    Rellena R.F.C. y Nombre en PUNTAJES a partir del folio.
+    Deja el R.F.C. y el Nombre de PUNTAJES iguales a los de PARTICIPANTES.
 
-    Los renglones guardados antes de que existieran esas columnas quedaron en
-    blanco. El folio sí lo traen todos, así que no hace falta recapturar nada:
-    se completan desde PARTICIPANTES en una sola escritura, y sólo de las dos
-    columnas, sin tocar los puntajes.
+    PARTICIPANTES manda: es donde se corrigen los nombres. PUNTAJES guarda una
+    copia sólo para que al abrir el Sheet se vea de quién es cada renglón, así
+    que esa copia se refresca —no sólo se rellena cuando está vacía—. Si no,
+    un nombre corregido dejaba con el viejo a los renglones capturados a mano.
+
+    Se escriben únicamente esas dos columnas; los puntajes no se tocan.
     """
     hoja, valores = _hoja("PUNTAJES")
     claves = internos("PUNTAJES")
@@ -348,22 +350,22 @@ def completar_identidad(df_participantes):
     datos = {f: (r, n) for f, r, n in zip(df_participantes["folio"],
                                           df_participantes["rfc"],
                                           df_participantes["nombre"])}
-    columnas, completados = [], 0
+    columnas, corregidos = [], 0
     for fila in valores[1:]:
         folio = fila[i_folio] if len(fila) > i_folio else ""
         rfc = fila[i_rfc] if len(fila) > i_rfc else ""
         nombre = fila[i_nom] if len(fila) > i_nom else ""
-        if not str(rfc).strip() and folio in datos:
+        if folio in datos and (rfc, nombre) != datos[folio]:
             rfc, nombre = datos[folio]
-            completados += 1
+            corregidos += 1
         columnas.append([rfc, nombre])
 
-    if completados:
+    if corregidos:
         rango = "%s2:%s%d" % (chr(ord("A") + i_rfc), chr(ord("A") + i_nom),
                               len(columnas) + 1)
         hoja.update(columnas, rango, value_input_option="USER_ENTERED")
         olvidar_lo_leido()
-    return completados
+    return corregidos
 
 
 def siguiente_folio(df, usados_ya=()):
@@ -725,18 +727,23 @@ st.sidebar.caption("Sólo al inicio del proceso. Da de alta a los participantes 
 archivo = st.sidebar.file_uploader("Precarga_Incremento_2026.xlsx", type="xlsx",
                                    key="archivo_precarga")
 
-# Renglones viejos sin R.F.C.: se completan desde el folio, una sola vez.
-if not df_punt.empty and not df_part.empty \
-        and (df_punt["rfc"].astype(str).str.strip() == "").any():
-    try:
-        _completados = completar_identidad(df_part)
-    except Exception as err:
-        st.warning("No pude completar el R.F.C. en PUNTAJES: %s" % err)
-    else:
-        if _completados:
-            df_punt = leer("PUNTAJES")
-            st.toast("Se completó el R.F.C. y el nombre en %d renglón(es) de "
-                     "PUNTAJES." % _completados)
+# PUNTAJES copia el R.F.C. y el nombre de cada participante para que el Sheet
+# se lea solo. Si en PARTICIPANTES se corrigió un nombre, aquí se refleja.
+if not df_punt.empty and not df_part.empty:
+    _esperado = dict(zip(df_part["folio"], zip(df_part["rfc"], df_part["nombre"])))
+    _desfasados = any(
+        f in _esperado and (r, n) != _esperado[f]
+        for f, r, n in zip(df_punt["folio"], df_punt["rfc"], df_punt["nombre"]))
+    if _desfasados:
+        try:
+            _corregidos = completar_identidad(df_part)
+        except Exception as err:
+            st.warning("No pude refrescar el R.F.C. y el nombre en PUNTAJES: %s" % err)
+        else:
+            if _corregidos:
+                df_punt = leer("PUNTAJES")
+                st.toast("Se actualizó el nombre o el R.F.C. en %d renglón(es) "
+                         "de PUNTAJES." % _corregidos)
 
 # Quién ya tiene puntos: evita volver a valorar a alguien por descuido.
 puntaje_de = {}
@@ -835,6 +842,13 @@ with tab_val:
                                   + (", …" if len(sin_leer) > 5 else "")))
 
                 opciones_grado = [NADA] + [OPCIONES[c.clave] for c in CONCEPTOS_FORMACION]
+                # El botón va ARRIBA de la tabla: con 42 renglones debajo, puesto al
+                # final había que recorrer toda la hoja para encontrarlo.
+                cargar = st.button("Cargar en el Sheet", type="primary",
+                                   key="bprecarga", width="stretch")
+                st.caption("Revisa la tabla de abajo antes de presionar. Da de alta a "
+                           "quien falte y corrige el nombre de quien ya esté.")
+
                 revisado = st.data_editor(
                     pd.DataFrame(propuesta), width="stretch", hide_index=True,
                     key="rev_precarga",
@@ -856,7 +870,7 @@ with tab_val:
                             "Leído del archivo", disabled=True, width="large"),
                     })
 
-                if st.button("Cargar en el Sheet", type="primary", key="bprecarga"):
+                if cargar:
                     if not capturo.strip():
                         st.error("Anota en la barra lateral quién está capturando.")
                     else:
