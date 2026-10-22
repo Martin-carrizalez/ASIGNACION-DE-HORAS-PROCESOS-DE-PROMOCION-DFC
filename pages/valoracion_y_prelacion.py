@@ -27,7 +27,9 @@ La hoja debe estar compartida como Editor con el correo de la cuenta de servicio
 
 import io
 import json
+import os
 import re
+import sys
 import unicodedata
 from datetime import datetime
 from difflib import get_close_matches
@@ -38,7 +40,14 @@ import pytz
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
-import tabulador as tb
+# tabulador.py vive en la raíz del repo. Cuando esta página corre como página
+# del multipágina, la raíz ya está en la ruta de búsqueda; cuando se despliega
+# apuntando directo a este archivo, no. Esto cubre los dos casos.
+_RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _RAIZ not in sys.path:
+    sys.path.insert(0, _RAIZ)
+
+import tabulador as tb  # noqa: E402
 
 TZ = pytz.timezone("America/Mexico_City")
 
