@@ -487,11 +487,6 @@ if _SUELTAS:
 st.sidebar.metric("Expedientes registrados", len(df_part))
 st.sidebar.metric("Expedientes valorados", df_punt["folio"].nunique() if not df_punt.empty else 0)
 
-if df_part.empty:
-    st.info("La pestaña PARTICIPANTES está vacía. La recepción ya no se captura "
-            "desde aquí: los expedientes deben estar en el Sheet antes de valorar.")
-    st.stop()
-
 tab_val, tab_pre = st.tabs(["1 · Valoración", "2 · Prelación"])
 
 
@@ -501,11 +496,6 @@ with tab_val:
     st.caption("Título Octavo, Art. 43 del Reglamento. Sólo se valoran actividades "
                "posteriores a la última promoción (Base PRIMERA.5).")
 
-    # --- Precarga de Recategorización 2025 ---------------------------------
-    # Se arrastran a) Formación académica y c) Antigüedad, y nada más. Los
-    # demás apartados quedan en cero porque la Base PRIMERA.5 excluye las
-    # constancias de actualización, experiencia, producción académica y
-    # laboral ya presentadas en recategorización.
     # --- Precarga desde el archivo Precarga_Incremento_2026.xlsx -----------
     # Ese archivo sale de las hojas individuales de Recategorización 2025 y lo
     # revisa la Comisión antes de subirlo. Aquí sólo se escribe lo que trae.
@@ -513,11 +503,16 @@ with tab_val:
     # Se arrastran a) Formación académica y c) Antigüedad, y nada más: la Base
     # PRIMERA.5 excluye las constancias de actualización, experiencia,
     # producción académica y laboral ya presentadas en recategorización.
-    with st.expander("Precargar participantes, formación y antigüedad"):
-        st.caption("Sube el archivo de precarga ya revisado. Da de alta a quien "
-                   "falte (se empareja por R.F.C.) y escribe los incisos a) y c). "
+    #
+    # Siempre abierto: es la única puerta de alta de participantes, porque la
+    # pestaña de Recepción ya no existe. Plegado no se ve y no se encuentra.
+    with st.container(border=True):
+        st.markdown("#### Cargar el archivo de precarga")
+        st.caption("Sube aquí **Precarga_Incremento_2026.xlsx** ya revisado. Da de "
+                   "alta a los participantes que falten (empareja por R.F.C.) y "
+                   "escribe los incisos a) Formación académica y c) Antigüedad. "
                    "Los apartados b) a g) no se tocan.")
-        archivo = st.file_uploader("Precarga_Incremento_2026.xlsx", type="xlsx",
+        archivo = st.file_uploader("Archivo de precarga (.xlsx)", type="xlsx",
                                    key="archivo_precarga")
 
         if CONCEPTO_ANIO is None:
@@ -643,6 +638,12 @@ with tab_val:
                                    "al revisar." % (cargados, altas))
                         st.rerun()
 
+
+    if df_part.empty:
+        st.info("Todavía no hay participantes registrados. Sube el archivo de "
+                "precarga aquí arriba para darlos de alta; de ahí en adelante "
+                "aparecen en esta lista.")
+        st.stop()
 
     # Se elige por nombre, en orden alfabético: todavía puede no haber número
     # de expediente, porque lo asigna la Comisión conforme revisa.
