@@ -233,16 +233,34 @@ def es_numero(v):
         return False
 
 
+# Traducción exacta de los textos de la hoja "Opciones" del formato 2025 a los
+# conceptos del tabulador. No se deja al parecido: las etiquetas del Reglamento
+# ("Doctorado en Educación con antecedente de Maestría (titulado)") y las del
+# formato ("Doctorado en Educación") no se parecen lo suficiente, y un grado mal
+# emparejado le mueve los puntos a alguien.
+EQUIVALENCIAS_2025 = {
+    "licenciatura en educacion": "LIC_EDU",
+    "maestria en educacion": "MAE_EDU",
+    "doctorado en educacion": "DOC_EDU",
+    "licenciatura no relacionada con educacion": "LIC_OTR",
+    "maestria no relacionada con educacion": "MAE_OTR",
+    "doctorado no relacionado con educacion": "DOC_OTR",
+}
+SIN_GRADO = {"", "ninguno", "documento sin valor", "sin valor", "nan", "0"}
+
+
 def emparejar_concepto(texto, nombres_por_clave, corte=0.80):
     """
     Traduce el texto del archivo de precarga al concepto del tabulador.
     Devuelve None si no hay una coincidencia clara: más vale dejarlo en blanco
     y capturarlo a mano que precargar un grado equivocado.
     """
-    if not str(texto).strip():
-        return None
-    normalizados = {normalizar(v): k for k, v in nombres_por_clave.items()}
     objetivo = normalizar(texto)
+    if objetivo in SIN_GRADO:
+        return None
+    if objetivo in EQUIVALENCIAS_2025:
+        return EQUIVALENCIAS_2025[objetivo]
+    normalizados = {normalizar(v): k for k, v in nombres_por_clave.items()}
     if objetivo in normalizados:
         return normalizados[objetivo]
     parecidos = get_close_matches(objetivo, list(normalizados), n=1, cutoff=corte)
@@ -300,8 +318,10 @@ CONCEPTO = {c.clave: c for f in tb.FACTORES for c in f.conceptos}
 # propia, se suma dentro de a) Formación académica (el Reglamento dice que
 # ese puntaje "se adiciona a Estudios en Educación").
 CUADRO = [
-    ("a) Formación académica", ("FORMACION", "OTROS")),
-    ("b) Actualización profesional", ("ACTUALIZACION",)),
+    ("a) Formación académica", ("FORM_EDU", "FORM_OTROS")),
+    # b1 (diplomados y especialidades, sin tope) + b2 (cursos como asistente,
+    # tope de 10 puntos). El concentrado de 2025 los suma en una sola columna.
+    ("b) Actualización profesional", ("ACTUALIZACION", "CURSOS_TOMADOS")),
     ("c) Antigüedad", ("ANTIGUEDAD",)),
     ("d) Experiencia Profesional y/o Académica", ("EXPERIENCIA",)),
     ("e) Productividad profesional", ("PRODUCTIVIDAD",)),
@@ -725,12 +745,19 @@ with tab_val:
     cols[-1].metric("TOTAL DE PUNTOS", desg["TOTAL"])
 
     # Avisos sobre los dos puntos que el Reglamento no resuelve solo.
+    # El Reglamento no dice si los grados de "Otros estudios" se acumulan entre
+    # sí, pero la Comisión ya lo resolvió en Recategorización 2025: los
+    # expedientes 34 y 58 traen Licenciatura 15 más Maestría 25 con subtotal 40.
+    # Por eso F_OTROS va con excluyente=False. El aviso queda sólo como registro.
     capturados_otros = [c.clave for c in tb.F_OTROS.conceptos if cantidades.get(c.clave, 0) > 0]
     if len(capturados_otros) > 1:
-        st.warning("Se capturó más de un grado en 'Otros estudios'. El Reglamento no "
-                   "dice si son acumulables entre sí; asienta el criterio en el acta.")
-    if tb.puntos_factor(tb.F_ACTUALIZACION, cantidades) == tb.F_ACTUALIZACION.tope_puntos:
-        st.info("El inciso b) llegó a su tope de 10 puntos.")
+        st.info("Se capturó más de un grado en 'Otros estudios' y se están sumando, "
+                "como en Recategorización 2025 (expedientes 34 y 58).")
+    # El tope de 10 puntos es del bloque b2 (cursos como asistente), no de b1.
+    tope_b2 = tb.F_CURSOS_TOMADOS.tope_puntos
+    if tope_b2 and tb.puntos_factor(tb.F_CURSOS_TOMADOS, cantidades) >= tope_b2:
+        st.info("El bloque b2 llegó a su tope de %g puntos; los cursos que "
+                "sigas capturando ya no suman." % tope_b2)
 
     if st.button("Guardar valoración", type="primary", key=f"bval_{folio_v}"):
         if not capturo.strip():
