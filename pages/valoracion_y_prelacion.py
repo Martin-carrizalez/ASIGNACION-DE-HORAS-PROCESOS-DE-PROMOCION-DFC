@@ -106,14 +106,6 @@ HOJAS = {
     ],
 }
 
-# Nombres con los que una columna pudo haberse guardado antes. Sirven para
-# reacomodar una pestaña vieja sin perder lo capturado.
-ANTERIORES = {"capturo": ("capturo",), "actualizado": ("actualizado",),
-              "no_documento": ("no_documento",), "notas": ("notas",),
-              "sin_valor": ("sin_valor",), "detalle": ("detalle",),
-              "concepto": ("concepto",), "no_expediente": ("no_expediente",)}
-
-
 def internos(nombre):
     return [a for a, _ in HOJAS[nombre]]
 
@@ -124,10 +116,10 @@ def visibles(nombre):
 
 def columna_interna(nombre, encabezado):
     """Del texto de un encabezado al nombre interno que le corresponde."""
+    # Se acepta el nombre visible de hoy y el nombre interno, que es como se
+    # guardaban las pestañas de la versión anterior.
     for interno, visible in HOJAS[nombre]:
         if encabezado == visible or encabezado == interno:
-            return interno
-        if encabezado in ANTERIORES.get(interno, ()):
             return interno
     return None
 
@@ -138,51 +130,20 @@ def columna_interna(nombre, encabezado):
 
 @st.cache_resource(show_spinner=False)
 def abrir_libro():
-    """
-    Abre el Sheet y deja cada pestaña con los encabezados legibles.
-
-    Si una pestaña viene de una versión anterior —con los nombres internos o
-    sin las columnas nuevas— se reacomoda una sola vez: se leen sus renglones
-    por nombre de columna y se vuelven a escribir en el orden actual. Nada se
-    pierde y ninguna columna se adivina por posición.
-    """
+    """Abre el Sheet y crea las pestañas que falten. El acomodo de columnas
+    lo hace _hoja(), que corre en cada lectura y en cada escritura."""
     alcances = ["https://www.googleapis.com/auth/spreadsheets",
                 "https://www.googleapis.com/auth/drive"]
     cred = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"], scopes=alcances)
     libro = gspread.authorize(cred).open_by_key(
         st.secrets["registro_incremento"]["sheet_id"])
-
     existentes = {h.title for h in libro.worksheets()}
     for nombre in HOJAS:
-        cabecera = visibles(nombre)
         if nombre not in existentes:
-            hoja = libro.add_worksheet(title=nombre, rows=500,
-                                       cols=len(cabecera) + 5)
-            hoja.append_row(cabecera)
-            continue
-
-        hoja = libro.worksheet(nombre)
-        valores = hoja.get_all_values()
-        if not valores or not any(c.strip() for c in valores[0]):
-            hoja.update([cabecera], "A1", value_input_option="USER_ENTERED")
-            continue
-        if valores[0] == cabecera:
-            continue
-
-        # Reacomodo: cada renglón se reconstruye por nombre de columna.
-        viejos = [columna_interna(nombre, c.strip()) for c in valores[0]]
-        filas = []
-        for fila in valores[1:]:
-            if not any(c.strip() for c in fila):
-                continue
-            por_interno = {k: (fila[j] if j < len(fila) else "")
-                           for j, k in enumerate(viejos) if k}
-            filas.append([por_interno.get(k, "") for k in internos(nombre)])
-        if hoja.col_count < len(cabecera):
-            hoja.add_cols(len(cabecera) - hoja.col_count)
-        hoja.clear()
-        hoja.update([cabecera] + filas, value_input_option="USER_ENTERED")
+            cabecera = visibles(nombre)
+            libro.add_worksheet(title=nombre, rows=500,
+                                cols=len(cabecera) + 5).append_row(cabecera)
     return libro
 
 
@@ -190,37 +151,61 @@ def _parece_encabezado(nombre, fila):
     """¿El renglón 1 es un encabezado y no un registro?"""
     llenas = [c.strip() for c in fila if c.strip()]
     if not llenas:
-        return True                      # vacío: se puede reponer sin riesgo
+        return False
     return all(columna_interna(nombre, c) for c in llenas)
 
 
 def _hoja(nombre):
     """
-    Devuelve la pestaña y sus valores con el encabezado garantizado.
+    Devuelve la pestaña y sus valores con las columnas en el orden actual.
 
-    Todas las escrituras dan por hecho que el renglón 1 es el encabezado; si
-    se borró o quedó a medias, se repone aquí. Si el renglón 1 trae datos de
-    verdad, se inserta uno nuevo arriba en vez de pisarlo.
+    Si la pestaña viene de una versión anterior —le falta una columna, o están
+    en otro orden— cada renglón se reconstruye por NOMBRE de columna y se
+    vuelve a escribir. Nunca por posición: sobrescribir el encabezado sin
+    recorrer los datos recorre el significado de todas las columnas.
     """
     hoja = abrir_libro().worksheet(nombre)
     valores = hoja.get_all_values()
     cabecera = visibles(nombre)
+    claves = internos(nombre)
+
     if valores and valores[0] == cabecera:
         return hoja, valores
+
     if not valores:
         hoja.update([cabecera], "A1", value_input_option="USER_ENTERED")
         return hoja, [cabecera]
+
     if _parece_encabezado(nombre, valores[0]):
-        hoja.update([cabecera], "A1", value_input_option="USER_ENTERED")
-        valores[0] = cabecera
+        # Encabezado reconocible: se reacomoda columna por columna.
+        viejas = [columna_interna(nombre, c.strip()) for c in valores[0]]
+        filas = []
+        for fila in valores[1:]:
+            if not any(c.strip() for c in fila):
+                continue
+            por_clave = {k: (fila[j] if j < len(fila) else "")
+                         for j, k in enumerate(viejas) if k}
+            filas.append([por_clave.get(k, "") for k in claves])
     else:
-        hoja.insert_row(cabecera, 1)
-        valores = [cabecera] + valores
-    return hoja, valores
+        # Sin encabezado reconocible: los datos ya vienen en el orden actual.
+        filas = [list(f) for f in valores if any(c.strip() for c in f)]
+
+    if hoja.col_count < len(cabecera):
+        hoja.add_cols(len(cabecera) - hoja.col_count)
+    hoja.clear()
+    hoja.update([cabecera] + filas, value_input_option="USER_ENTERED")
+    return hoja, [cabecera] + filas
 
 
+@st.cache_data(show_spinner=False)
 def leer(nombre):
-    """Lee una pestaña completa con los nombres internos como columnas."""
+    """
+    Lee una pestaña completa con los nombres internos como columnas.
+
+    Va en caché porque Streamlit reejecuta el script entero en cada clic y sin
+    esto cada casilla del editor costaba tres lecturas al Sheet. Toda escritura
+    llama a olvidar_lo_leido() para que lo siguiente que se lea sea lo nuevo.
+    """
     hoja, valores = _hoja(nombre)
     claves = [columna_interna(nombre, c.strip()) for c in valores[0]] if valores else []
     filas = []
@@ -232,6 +217,11 @@ def leer(nombre):
     df = pd.DataFrame(filas, columns=internos(nombre)) if filas \
         else pd.DataFrame(columns=internos(nombre))
     return df.fillna("")
+
+
+def olvidar_lo_leido():
+    """Tira la caché de lectura. Se llama después de cada escritura."""
+    leer.clear()
 
 
 def _renglon(nombre, registro):
@@ -577,10 +567,15 @@ def excel_para_asignacion(orden):
     """
     filas = []
     for e in orden:
+        categoria = str(e["categoria_actual"]).strip().upper()
+        nivel = str(e["nivel_actual"]).strip().upper()
         filas.append({
             "rfc": e["rfc"],
             "nombre": e["nombre"],
-            "puesto": f"HORAS DE {str(e['categoria_actual']).upper()} {str(e['nivel_actual']).upper()}",
+            # Sin categoría no se arma el puesto: vale más dejarlo vacío que
+            # entregar "HORAS DE" pelón y que la otra app lo dé por bueno.
+            "puesto": ("HORAS DE %s %s" % (categoria, nivel)).strip()
+                      if categoria else "",
             "plaza": "",
             "puntaje": e["total"] if e["valorado"] == "Sí" else None,
             "horas asesor": None,
@@ -617,8 +612,8 @@ st.caption("Comisión Dictaminadora Interna · Dirección de Formación Continua
 # Quién captura: queda asentado en cada renglón para efectos de auditoría,
 # porque el oficio CDESE/017/2026 pide un concentrado del proceso.
 capturo = st.sidebar.text_input("Captura (nombre de quien registra)", key="capturo")
-if st.sidebar.button("Recargar datos"):
-    st.cache_data.clear()
+if st.sidebar.button("Recargar datos del Sheet"):
+    olvidar_lo_leido()
     st.rerun()
 
 try:
@@ -637,7 +632,12 @@ if _SUELTAS:
     st.stop()
 
 st.sidebar.metric("Expedientes registrados", len(df_part))
-st.sidebar.metric("Expedientes valorados", df_punt["folio"].nunique() if not df_punt.empty else 0)
+# Valorado = tiene al menos un documento que puntúa. Los que sólo traen
+# documentos sin valor están capturados, pero no valorados.
+_con_puntos = df_punt[df_punt["sin_valor"].astype(str).str.strip() == ""] \
+    if not df_punt.empty else df_punt
+st.sidebar.metric("Expedientes valorados",
+                  _con_puntos["folio"].nunique() if not _con_puntos.empty else 0)
 
 tab_val, tab_pre = st.tabs(["1 · Valoración", "2 · Prelación"])
 
@@ -795,6 +795,7 @@ with tab_val:
                         except Exception as err:
                             st.error("No se pudo escribir en el Sheet: %s" % err)
                         else:
+                            olvidar_lo_leido()
                             st.success(
                                 "%d participante(s) procesados, %d dados de alta, "
                                 "%d renglón(es) de puntaje escritos. El número de "
@@ -804,169 +805,179 @@ with tab_val:
                             st.rerun()
 
 
-    if df_part.empty:
+    # st.stop() aquí dentro detendría el script completo y dejaría la pestaña
+    # de Prelación en blanco sin explicación. Se salta sólo esta sección.
+    hay_gente = not df_part.empty
+    if not hay_gente:
         st.info("Todavía no hay participantes registrados. Sube el archivo de "
                 "precarga aquí arriba para darlos de alta; de ahí en adelante "
                 "aparecen en esta lista.")
-        st.stop()
 
-    # Se elige por nombre, en orden alfabético: todavía puede no haber número
-    # de expediente, porque lo asigna la Comisión conforme revisa.
-    orden_alfabetico = df_part.sort_values("nombre")["folio"].tolist()
+if hay_gente:
+    with tab_val:
+        # Se elige por nombre, en orden alfabético: todavía puede no haber número
+        # de expediente, porque lo asigna la Comisión conforme revisa.
+        orden_alfabetico = df_part.sort_values("nombre")["folio"].tolist()
 
-    def _rotulo_participante(f):
-        fila = df_part.loc[df_part.folio == f].iloc[0]
-        exp = str(fila.get("no_expediente", "")).strip()
-        return ("%s · exp. %s" % (fila["nombre"], exp)) if exp else fila["nombre"]
+        def _rotulo_participante(f):
+            fila = df_part.loc[df_part.folio == f].iloc[0]
+            exp = str(fila.get("no_expediente", "")).strip()
+            return ("%s · exp. %s" % (fila["nombre"], exp)) if exp else fila["nombre"]
 
-    folio_v = st.selectbox("Participante a valorar", orden_alfabetico,
-                           format_func=_rotulo_participante, key="folio_val")
+        folio_v = st.selectbox("Participante a valorar", orden_alfabetico,
+                               format_func=_rotulo_participante, key="folio_val")
 
-    # Número de expediente: lo escribe quien revisa, en el orden que decida.
-    fila_v = df_part.loc[df_part.folio == folio_v].iloc[0].to_dict()
-    c_exp, c_bot = st.columns([1, 3])
-    exp_nuevo = c_exp.text_input("No. de expediente",
-                                 value=str(fila_v.get("no_expediente", "")),
-                                 key="exp_%s" % folio_v,
-                                 help="Lo asigna la Comisión al revisar. "
-                                      "Puede quedar en blanco mientras tanto.")
-    if exp_nuevo.strip() != str(fila_v.get("no_expediente", "")).strip():
-        if c_bot.button("Guardar el número de expediente", key="bexp_%s" % folio_v):
-            fila_v["no_expediente"] = exp_nuevo.strip()
-            fila_v["actualizado"] = ahora()
-            actualizar_participante(folio_v, fila_v)
-            st.success("Expediente %s asignado." % exp_nuevo.strip())
-            st.rerun()
+        # Número de expediente: lo escribe quien revisa, en el orden que decida.
+        fila_v = df_part.loc[df_part.folio == folio_v].iloc[0].to_dict()
+        c_exp, c_bot = st.columns([1, 3])
+        exp_nuevo = c_exp.text_input("No. de expediente",
+                                     value=str(fila_v.get("no_expediente", "")),
+                                     key="exp_%s" % folio_v,
+                                     help="Lo asigna la Comisión al revisar. "
+                                          "Puede quedar en blanco mientras tanto.")
+        if exp_nuevo.strip() != str(fila_v.get("no_expediente", "")).strip():
+            if c_bot.button("Guardar el número de expediente", key="bexp_%s" % folio_v):
+                fila_v["no_expediente"] = exp_nuevo.strip()
+                fila_v["actualizado"] = ahora()
+                actualizar_participante(folio_v, fila_v)
+                olvidar_lo_leido()
+                st.success("Expediente %s asignado." % exp_nuevo.strip())
+                st.rerun()
 
-    st.info("Un renglón por documento. En **Detalle** escribe el nombre de la "
-            "constancia — «Diplomado en Gestión Escolar», «Curso de Evaluación "
-            "Formativa» — y en **Cantidad** cuántos documentos iguales amparas "
-            "con ese mismo renglón.")
+        st.info("Un renglón por documento. En **Detalle** escribe el nombre de la "
+                "constancia — «Diplomado en Gestión Escolar», «Curso de Evaluación "
+                "Formativa» — y en **Cantidad** cuántos documentos iguales amparas "
+                "con ese mismo renglón.")
 
-    # Lo ya capturado para este folio, repartido entre los factores.
-    previos = df_punt[df_punt.folio == folio_v]
-    renglones_previos = {f.clave: [] for f in tb.FACTORES}
-    for _, r in previos.iterrows():
-        clave = str(r["concepto"]).strip()
-        if clave not in CONCEPTO:
-            continue
-        factor = next(f for f in tb.FACTORES if any(c.clave == clave for c in f.conceptos))
-        renglones_previos[factor.clave].append({
-            "No.": str(r.get("no_documento") or ""),
-            "Concepto": OPCIONES[clave],
-            "Detalle": str(r.get("detalle") or ""),
-            "Cantidad": float(r["cantidad"] or 0),
-            "Sin valor": str(r.get("sin_valor") or "").strip().lower() in ("sí", "si", "true", "1"),
-            "Notas y observaciones": str(r.get("notas") or ""),
-        })
+        # Lo ya capturado para este folio, repartido entre los factores.
+        previos = df_punt[df_punt.folio == folio_v]
+        renglones_previos = {f.clave: [] for f in tb.FACTORES}
+        for _, r in previos.iterrows():
+            clave = str(r["concepto"]).strip()
+            if clave not in CONCEPTO:
+                continue
+            factor = next(f for f in tb.FACTORES if any(c.clave == clave for c in f.conceptos))
+            renglones_previos[factor.clave].append({
+                "No.": str(r.get("no_documento") or ""),
+                "Concepto": OPCIONES[clave],
+                "Detalle": str(r.get("detalle") or ""),
+                "Cantidad": float(r["cantidad"] or 0),
+                "Sin valor": str(r.get("sin_valor") or "").strip().lower() in ("sí", "si", "true", "1"),
+                "Notas y observaciones": str(r.get("notas") or ""),
+            })
 
-    capturado = {}
-    for factor in tb.FACTORES:
-        opciones = [OPCIONES[c.clave] for c in factor.conceptos]
-        base = pd.DataFrame(renglones_previos[factor.clave] or [],
-                            columns=["No.", "Concepto", "Detalle", "Cantidad",
-                                     "Sin valor", "Notas y observaciones"])
-        parciales = cantidades_de(base.to_dict("records"))
-        subtotal = tb.puntos_factor(factor, parciales)
+        capturado = {}
+        for factor in tb.FACTORES:
+            opciones = [OPCIONES[c.clave] for c in factor.conceptos]
+            base = pd.DataFrame(renglones_previos[factor.clave] or [],
+                                columns=["No.", "Concepto", "Detalle", "Cantidad",
+                                         "Sin valor", "Notas y observaciones"])
+            parciales = cantidades_de(base.to_dict("records"))
+            subtotal = tb.puntos_factor(factor, parciales)
 
-        with st.expander("%s — %s pts" % (factor.etiqueta, subtotal),
-                         expanded=bool(renglones_previos[factor.clave])):
-            if factor.nota:
-                st.caption(factor.nota)
-            editado = st.data_editor(
-                base, num_rows="dynamic", width="stretch", hide_index=True,
-                key=f"doc_{folio_v}_{factor.clave}",
-                column_config={
-                    "No.": st.column_config.TextColumn(
-                        "No.", width="small",
-                        help="Número del documento en la relación que entregó "
-                             "el participante. Es el que se cita en las notas."),
-                    "Concepto": st.column_config.SelectboxColumn(
-                        "Concepto del tabulador", options=opciones,
-                        width="large", required=True),
-                    "Detalle": st.column_config.TextColumn(
-                        "Detalle (nombre del documento)", width="medium"),
-                    "Cantidad": st.column_config.NumberColumn(
-                        "Cantidad", min_value=0.0, step=1.0, default=1.0, width="small"),
-                    "Sin valor": st.column_config.CheckboxColumn(
-                        "Sin valor", default=False,
-                        help="Documento recibido que no puntúa. Se conserva en "
-                             "el expediente con cero puntos."),
-                    "Notas y observaciones": st.column_config.TextColumn(
-                        "Notas y observaciones", width="medium"),
-                })
-            capturado[factor.clave] = editado.to_dict("records")
+            with st.expander("%s — %s pts" % (factor.etiqueta, subtotal),
+                             expanded=bool(renglones_previos[factor.clave])):
+                if factor.nota:
+                    st.caption(factor.nota)
+                editado = st.data_editor(
+                    base, num_rows="dynamic", width="stretch", hide_index=True,
+                    key=f"doc_{folio_v}_{factor.clave}",
+                    column_config={
+                        "No.": st.column_config.TextColumn(
+                            "No.", width="small",
+                            help="Número del documento en la relación que entregó "
+                                 "el participante. Es el que se cita en las notas."),
+                        "Concepto": st.column_config.SelectboxColumn(
+                            "Concepto del tabulador", options=opciones,
+                            width="large", required=True),
+                        "Detalle": st.column_config.TextColumn(
+                            "Detalle (nombre del documento)", width="medium"),
+                        "Cantidad": st.column_config.NumberColumn(
+                            "Cantidad", min_value=0.0, step=1.0, default=1.0, width="small"),
+                        "Sin valor": st.column_config.CheckboxColumn(
+                            "Sin valor", default=False,
+                            help="Documento recibido que no puntúa. Se conserva en "
+                                 "el expediente con cero puntos."),
+                        "Notas y observaciones": st.column_config.TextColumn(
+                            "Notas y observaciones", width="medium"),
+                    })
+                capturado[factor.clave] = editado.to_dict("records")
 
-    # Cantidades de todos los factores juntos: es lo que entiende el tabulador.
-    cantidades = {}
-    for renglones in capturado.values():
-        for clave, cantidad in cantidades_de(renglones).items():
-            cantidades[clave] = cantidades.get(clave, 0) + cantidad
+        # Cantidades de todos los factores juntos: es lo que entiende el tabulador.
+        cantidades = {}
+        for renglones in capturado.values():
+            for clave, cantidad in cantidades_de(renglones).items():
+                cantidades[clave] = cantidades.get(clave, 0) + cantidad
 
-    desg = tb.desglose(cantidades)
-    st.markdown("#### Puntaje")
-    cols = st.columns(len(tb.FACTORES) + 1)
-    for i, factor in enumerate(tb.FACTORES):
-        cols[i].metric(factor.etiqueta, desg[factor.clave])
-    cols[-1].metric("TOTAL DE PUNTOS", desg["TOTAL"])
+        desg = tb.desglose(cantidades)
+        cuadro = cuadro_general(cantidades)
+        st.markdown("#### Puntaje")
+        # Los siete apartados del concentrado, en dos renglones de cuatro. Con
+        # los nueve factores internos en una sola fila los rótulos no se leían.
+        titulos = [t for t, _ in CUADRO] + ["TOTAL DE PUNTOS"]
+        for inicio in (0, 4):
+            cols = st.columns(4)
+            for col, titulo in zip(cols, titulos[inicio:inicio + 4]):
+                col.metric(titulo, cuadro.get(titulo, desg["TOTAL"]))
 
-    # Avisos sobre los dos puntos que el Reglamento no resuelve solo.
-    # El Reglamento no dice si los grados de "Otros estudios" se acumulan entre
-    # sí, pero la Comisión ya lo resolvió en Recategorización 2025: los
-    # expedientes 34 y 58 traen Licenciatura 15 más Maestría 25 con subtotal 40.
-    # Por eso F_OTROS va con excluyente=False. El aviso queda sólo como registro.
-    capturados_otros = [c.clave for c in tb.F_OTROS.conceptos if cantidades.get(c.clave, 0) > 0]
-    if len(capturados_otros) > 1:
-        st.info("Se capturó más de un grado en 'Otros estudios' y se están sumando, "
-                "como en Recategorización 2025 (expedientes 34 y 58).")
-    # El tope de 10 puntos es del bloque b2 (cursos como asistente), no de b1.
-    tope_b2 = tb.F_CURSOS_TOMADOS.tope_puntos
-    if tope_b2 and tb.puntos_factor(tb.F_CURSOS_TOMADOS, cantidades) >= tope_b2:
-        st.info("El bloque b2 llegó a su tope de %g puntos; los cursos que "
-                "sigas capturando ya no suman." % tope_b2)
+        # Avisos sobre los dos puntos que el Reglamento no resuelve solo.
+        # El Reglamento no dice si los grados de "Otros estudios" se acumulan entre
+        # sí, pero la Comisión ya lo resolvió en Recategorización 2025: los
+        # expedientes 34 y 58 traen Licenciatura 15 más Maestría 25 con subtotal 40.
+        # Por eso F_OTROS va con excluyente=False. El aviso queda sólo como registro.
+        capturados_otros = [c.clave for c in tb.F_OTROS.conceptos if cantidades.get(c.clave, 0) > 0]
+        if len(capturados_otros) > 1:
+            st.info("Se capturó más de un grado en 'Otros estudios' y se están sumando, "
+                    "como en Recategorización 2025 (expedientes 34 y 58).")
+        # El tope de 10 puntos es del bloque b2 (cursos como asistente), no de b1.
+        tope_b2 = tb.F_CURSOS_TOMADOS.tope_puntos
+        if tope_b2 and tb.puntos_factor(tb.F_CURSOS_TOMADOS, cantidades) >= tope_b2:
+            st.info("El bloque b2 llegó a su tope de %g puntos; los cursos que "
+                    "sigas capturando ya no suman." % tope_b2)
 
-    if st.button("Guardar valoración", type="primary", key=f"bval_{folio_v}"):
-        if not capturo.strip():
-            st.error("Anota en la barra lateral quién está capturando.")
-        else:
-            registros = []
-            # Números ya escritos a mano: no se reasignan.
-            ocupados = set()
-            for renglones in capturado.values():
-                for r in renglones:
-                    n = str(r.get("No.") or "").strip()
-                    if n.isdigit():
-                        ocupados.add(int(n))
-            siguiente = 1
+        if st.button("Guardar valoración", type="primary", key=f"bval_{folio_v}"):
+            if not capturo.strip():
+                st.error("Anota en la barra lateral quién está capturando.")
+            else:
+                registros = []
+                # Números ya escritos a mano: no se reasignan.
+                ocupados = set()
+                for renglones in capturado.values():
+                    for r in renglones:
+                        n = str(r.get("No.") or "").strip()
+                        if n.isdigit():
+                            ocupados.add(int(n))
+                siguiente = 1
 
-            for renglones in capturado.values():
-                for r in renglones:
-                    clave = DE_OPCION.get(str(r.get("Concepto", "")).strip())
-                    try:
-                        cantidad = float(r.get("Cantidad") or 0)
-                    except (TypeError, ValueError):
-                        cantidad = 0
-                    sin_valor = bool(r.get("Sin valor"))
-                    # Un documento sin valor se guarda aunque no sume puntos:
-                    # desaparecerlo deja el expediente incompleto.
-                    if clave and (cantidad > 0 or sin_valor):
-                        numero = str(r.get("No.") or "").strip()
-                        if not numero.isdigit():
-                            while siguiente in ocupados:
-                                siguiente += 1
-                            numero = str(siguiente)
-                            ocupados.add(siguiente)
-                        registros.append({
-                            "folio": folio_v, "concepto": clave, "cantidad": cantidad,
-                            "detalle": str(r.get("Detalle") or "").strip(),
-                            "no_documento": numero,
-                            "notas": str(r.get("Notas y observaciones") or "").strip(),
-                            "sin_valor": "Sí" if sin_valor else "",
-                            "capturo": capturo.strip(), "actualizado": ahora()})
-            reemplazar_por_folio("PUNTAJES", folio_v, registros)
-            st.success(f"Valoración guardada: {len(registros)} documento(s), "
-                       f"{desg['TOTAL']} puntos.")
-            st.rerun()
+                for renglones in capturado.values():
+                    for r in renglones:
+                        clave = DE_OPCION.get(str(r.get("Concepto", "")).strip())
+                        try:
+                            cantidad = float(r.get("Cantidad") or 0)
+                        except (TypeError, ValueError):
+                            cantidad = 0
+                        sin_valor = bool(r.get("Sin valor"))
+                        # Un documento sin valor se guarda aunque no sume puntos:
+                        # desaparecerlo deja el expediente incompleto.
+                        if clave and (cantidad > 0 or sin_valor):
+                            numero = str(r.get("No.") or "").strip()
+                            if not numero.isdigit():
+                                while siguiente in ocupados:
+                                    siguiente += 1
+                                numero = str(siguiente)
+                                ocupados.add(siguiente)
+                            registros.append({
+                                "folio": folio_v, "concepto": clave, "cantidad": cantidad,
+                                "detalle": str(r.get("Detalle") or "").strip(),
+                                "no_documento": numero,
+                                "notas": str(r.get("Notas y observaciones") or "").strip(),
+                                "sin_valor": "Sí" if sin_valor else "",
+                                "capturo": capturo.strip(), "actualizado": ahora()})
+                reemplazar_por_folio("PUNTAJES", folio_v, registros)
+                olvidar_lo_leido()
+                st.success(f"Valoración guardada: {len(registros)} documento(s), "
+                           f"{desg['TOTAL']} puntos.")
+                st.rerun()
 
 
 # --- 2. PRELACIÓN ---------------------------------------------------------
@@ -1105,6 +1116,12 @@ with tab_pre:
         st.caption("Se carga tal cual en el sistema de asignación. Las horas de "
                    "asesor, de otras áreas y de base van en blanco: salen de nómina "
                    "y se capturan allá.")
+        sin_categoria = int((tabla["Categoría"].astype(str).str.strip() == "").sum())
+        if sin_categoria:
+            st.warning("%d participante(s) no traen categoría ni nivel, así que su "
+                       "columna «puesto» sale vacía en ese archivo. Hay que llenarlas "
+                       "en la pestaña PARTICIPANTES del Sheet antes de usarlo."
+                       % sin_categoria)
 
         # Concentrado del proceso que pide el oficio CDESE/017/2026, inciso d).
         concentrado = {
