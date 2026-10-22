@@ -323,6 +323,49 @@ def actualizar_participante(folio, registro):
     return False
 
 
+def escribir_participantes(registros):
+    """Reescribe PARTICIPANTES completo en una sola petición."""
+    hoja, valores = _hoja("PARTICIPANTES")
+    cabecera = visibles("PARTICIPANTES")
+    _escribir_encima(hoja,
+                     [cabecera] + [_renglon("PARTICIPANTES", r) for r in registros],
+                     len(valores), len(cabecera))
+
+
+def completar_identidad(df_participantes):
+    """
+    Rellena R.F.C. y Nombre en PUNTAJES a partir del folio.
+
+    Los renglones guardados antes de que existieran esas columnas quedaron en
+    blanco. El folio sí lo traen todos, así que no hace falta recapturar nada:
+    se completan desde PARTICIPANTES en una sola escritura, y sólo de las dos
+    columnas, sin tocar los puntajes.
+    """
+    hoja, valores = _hoja("PUNTAJES")
+    claves = internos("PUNTAJES")
+    i_folio, i_rfc, i_nom = (claves.index("folio"), claves.index("rfc"),
+                             claves.index("nombre"))
+    datos = {f: (r, n) for f, r, n in zip(df_participantes["folio"],
+                                          df_participantes["rfc"],
+                                          df_participantes["nombre"])}
+    columnas, completados = [], 0
+    for fila in valores[1:]:
+        folio = fila[i_folio] if len(fila) > i_folio else ""
+        rfc = fila[i_rfc] if len(fila) > i_rfc else ""
+        nombre = fila[i_nom] if len(fila) > i_nom else ""
+        if not str(rfc).strip() and folio in datos:
+            rfc, nombre = datos[folio]
+            completados += 1
+        columnas.append([rfc, nombre])
+
+    if completados:
+        rango = "%s2:%s%d" % (chr(ord("A") + i_rfc), chr(ord("A") + i_nom),
+                              len(columnas) + 1)
+        hoja.update(columnas, rango, value_input_option="USER_ENTERED")
+        olvidar_lo_leido()
+    return completados
+
+
 def siguiente_folio(df, usados_ya=()):
     """Llave interna consecutiva. No es el número de expediente."""
     todos = list(df["folio"].astype(str)) + list(usados_ya)
@@ -682,6 +725,19 @@ st.sidebar.caption("Sólo al inicio del proceso. Da de alta a los participantes 
 archivo = st.sidebar.file_uploader("Precarga_Incremento_2026.xlsx", type="xlsx",
                                    key="archivo_precarga")
 
+# Renglones viejos sin R.F.C.: se completan desde el folio, una sola vez.
+if not df_punt.empty and not df_part.empty \
+        and (df_punt["rfc"].astype(str).str.strip() == "").any():
+    try:
+        _completados = completar_identidad(df_part)
+    except Exception as err:
+        st.warning("No pude completar el R.F.C. en PUNTAJES: %s" % err)
+    else:
+        if _completados:
+            df_punt = leer("PUNTAJES")
+            st.toast("Se completó el R.F.C. y el nombre en %d renglón(es) de "
+                     "PUNTAJES." % _completados)
+
 # Quién ya tiene puntos: evita volver a valorar a alguien por descuido.
 puntaje_de = {}
 if not df_punt.empty:
@@ -750,9 +806,14 @@ with tab_val:
                     grado = emparejar_concepto(r.get("Estudios en educación"), NOMBRE)
                     otros = emparejar_concepto(r.get("Otros estudios"), NOMBRE)
                     anios = r.get("Años de servicio 2026")
+                    # El nombre bueno es el del expediente de 2025: la lista de
+                    # registro trae nombres incompletos ("DULCE JOSEFINA").
+                    nombre = str(r.get("Nombre en el expediente 2025") or "").strip() \
+                        or str(r["Nombre completo"]).strip()
                     propuesta.append({
                         "Cargar": True,
-                        "Nombre completo": str(r["Nombre completo"]).strip(),
+                        "Nombre": nombre.upper(),
+                        "Como se registró": str(r["Nombre completo"]).strip(),
                         "R.F.C.": rfc,
                         "Horas solicitadas": r.get("Horas solicitadas", ""),
                         "Ya está": "Sí" if normalizar(rfc) in por_rfc else "",
@@ -764,7 +825,7 @@ with tab_val:
                                              r.get("Otros estudios"), anios] if str(x).strip()),
                     })
 
-                sin_leer = [p["Nombre completo"] for p in propuesta
+                sin_leer = [p["Nombre"] for p in propuesta
                             if p["Estudios en educación"] == NADA
                             and p["Otros estudios"] == NADA]
                 if sin_leer:
@@ -779,6 +840,10 @@ with tab_val:
                     key="rev_precarga",
                     column_config={
                         "Cargar": st.column_config.CheckboxColumn("Cargar"),
+                        "Nombre": st.column_config.TextColumn(
+                            "Nombre (como va a quedar)", width="large"),
+                        "Como se registró": st.column_config.TextColumn(
+                            "Como se registró", disabled=True, width="medium"),
                         "Ya está": st.column_config.TextColumn(
                             "Ya registrado", disabled=True, width="small"),
                         "Estudios en educación": st.column_config.SelectboxColumn(
@@ -798,15 +863,23 @@ with tab_val:
                         # Todo se arma en memoria y se escribe de un solo viaje.
                         # Una llamada por participante son más de cien peticiones
                         # seguidas y Google corta a las 60 escrituras por minuto.
-                        altas_participantes = []
+                        # PARTICIPANTES se reescribe completo en una sola
+                        # petición: así se corrige de paso el nombre de quien
+                        # ya estaba dado de alta con el nombre incompleto de
+                        # la lista de registro.
+                        por_folio = {r["folio"]: dict(r)
+                                     for _, r in df_part.iterrows()}
+                        orden_actual = list(df_part["folio"])
                         renglones_puntajes = []
                         folios_tocados = []
                         nuevos_folios = []
+                        altas = renombrados = 0
 
                         for r in revisado.to_dict("records"):
                             if not r["Cargar"]:
                                 continue
                             rfc = str(r["R.F.C."]).strip().upper()
+                            nombre = str(r["Nombre"]).strip().upper()
                             folio = por_rfc.get(normalizar(rfc))
                             if folio is None:
                                 # Alta mínima. El número de expediente queda en
@@ -814,39 +887,25 @@ with tab_val:
                                 # revisar, en el orden que ella decida.
                                 folio = siguiente_folio(df_part, nuevos_folios)
                                 nuevos_folios.append(folio)
-                                altas_participantes.append({
+                                orden_actual.append(folio)
+                                por_folio[folio] = {
                                     "folio": folio, "fecha_recepcion": ahora(),
-                                    "nombre": str(r["Nombre completo"]).strip().upper(),
-                                    "rfc": rfc, "estatus": ESTATUS[0],
+                                    "nombre": nombre, "rfc": rfc,
+                                    "estatus": ESTATUS[0],
                                     "horas_solicitadas": r.get("Horas solicitadas", ""),
                                     "no_expediente": "",
-                                    "capturo": capturo.strip(), "actualizado": ahora()})
-
-                            folios_tocados.append(folio)
-                            nuevos = []
-                            for columna in ("Estudios en educación", "Otros estudios"):
-                                clave = DE_OPCION.get(str(r[columna]).strip())
-                                if clave:
-                                    nuevos.append({
-                                        "folio": folio, "rfc": rfc,
-                                        "nombre": str(r["Nombre completo"]).strip().upper(),
-                                        "concepto": clave, "cantidad": 1, "detalle": ""})
-                            anios = float(r["Años de servicio"] or 0)
-                            if anios > 0:
-                                nuevos.append({
-                                    "folio": folio, "rfc": rfc,
-                                    "nombre": str(r["Nombre completo"]).strip().upper(),
-                                    "concepto": CONCEPTO_ANIO.clave,
-                                    "cantidad": anios, "detalle": ""})
-                            for n in nuevos:
-                                n.update({"capturo": capturo.strip(),
-                                          "actualizado": ahora(), "sin_valor": "",
-                                          "no_documento": "", "notas": ""})
-                            renglones_puntajes.extend(nuevos)
+                                    "capturo": capturo.strip(),
+                                    "actualizado": ahora()}
+                                altas += 1
+                            elif nombre and por_folio[folio].get("nombre") != nombre:
+                                por_folio[folio]["nombre"] = nombre
+                                por_folio[folio]["actualizado"] = ahora()
+                                renombrados += 1
 
                         try:
-                            if altas_participantes:
-                                agregar_varios("PARTICIPANTES", altas_participantes)
+                            if altas or renombrados:
+                                escribir_participantes(
+                                    [por_folio[f] for f in orden_actual])
                             if folios_tocados:
                                 # Conserva lo capturado de los demás apartados y
                                 # reemplaza sólo los renglones de a) y c).
@@ -858,10 +917,11 @@ with tab_val:
                         else:
                             olvidar_lo_leido()
                             st.success(
-                                "%d participante(s) procesados, %d dados de alta, "
-                                "%d renglón(es) de puntaje escritos. El número de "
-                                "expediente queda en blanco: se asigna al revisar."
-                                % (len(folios_tocados), len(altas_participantes),
+                                "%d participante(s) procesados · %d dados de alta · "
+                                "%d con el nombre corregido · %d renglón(es) de "
+                                "puntaje escritos. El número de expediente queda "
+                                "en blanco: se asigna al revisar."
+                                % (len(folios_tocados), altas, renombrados,
                                    len(renglones_puntajes)))
                             st.rerun()
 
@@ -881,12 +941,29 @@ if hay_gente:
         orden_alfabetico = df_part.sort_values("nombre")["folio"].tolist()
 
         def _rotulo_participante(f):
+            """Nombre, expediente y estado. El estado va para que nadie vuelva
+            a valorar a quien ya quedó listo y se trabaje doble."""
             fila = df_part.loc[df_part.folio == f].iloc[0]
+            partes = [fila["nombre"]]
             exp = str(fila.get("no_expediente", "")).strip()
-            return ("%s · exp. %s" % (fila["nombre"], exp)) if exp else fila["nombre"]
+            if exp:
+                partes.append("exp. %s" % exp)
+            partes.append("✔ %g pts" % puntaje_de[f] if f in puntaje_de
+                          else "PENDIENTE")
+            return "  ·  ".join(partes)
+
+        hechos = sum(1 for f in orden_alfabetico if f in puntaje_de)
+        st.caption("Valorados **%d de %d**. En la lista, ✔ es expediente con "
+                   "puntaje guardado; PENDIENTE es el que falta."
+                   % (hechos, len(orden_alfabetico)))
 
         folio_v = st.selectbox("Participante a valorar", orden_alfabetico,
                                format_func=_rotulo_participante, key="folio_val")
+
+        if folio_v in puntaje_de:
+            st.warning("**Este expediente ya está valorado: %g puntos.** "
+                       "Si guardas, se reemplaza por completo lo que tenía."
+                       % puntaje_de[folio_v])
 
         # Número de expediente: lo escribe quien revisa, en el orden que decida.
         fila_v = df_part.loc[df_part.folio == folio_v].iloc[0].to_dict()
