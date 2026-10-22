@@ -185,10 +185,42 @@ def abrir_libro():
     return libro
 
 
-def leer(nombre):
-    """Lee una pestaña completa con los nombres internos como columnas."""
+def _parece_encabezado(nombre, fila):
+    """¿El renglón 1 es un encabezado y no un registro?"""
+    llenas = [c.strip() for c in fila if c.strip()]
+    if not llenas:
+        return True                      # vacío: se puede reponer sin riesgo
+    return all(columna_interna(nombre, c) for c in llenas)
+
+
+def _hoja(nombre):
+    """
+    Devuelve la pestaña y sus valores con el encabezado garantizado.
+
+    Todas las escrituras dan por hecho que el renglón 1 es el encabezado; si
+    se borró o quedó a medias, se repone aquí. Si el renglón 1 trae datos de
+    verdad, se inserta uno nuevo arriba en vez de pisarlo.
+    """
     hoja = abrir_libro().worksheet(nombre)
     valores = hoja.get_all_values()
+    cabecera = visibles(nombre)
+    if valores and valores[0] == cabecera:
+        return hoja, valores
+    if not valores:
+        hoja.update([cabecera], "A1", value_input_option="USER_ENTERED")
+        return hoja, [cabecera]
+    if _parece_encabezado(nombre, valores[0]):
+        hoja.update([cabecera], "A1", value_input_option="USER_ENTERED")
+        valores[0] = cabecera
+    else:
+        hoja.insert_row(cabecera, 1)
+        valores = [cabecera] + valores
+    return hoja, valores
+
+
+def leer(nombre):
+    """Lee una pestaña completa con los nombres internos como columnas."""
+    hoja, valores = _hoja(nombre)
     claves = [columna_interna(nombre, c.strip()) for c in valores[0]] if valores else []
     filas = []
     for fila in valores[1:]:
@@ -214,7 +246,7 @@ def agregar_varios(nombre, registros):
     """Agrega muchos renglones en una sola petición."""
     if not registros:
         return
-    hoja = abrir_libro().worksheet(nombre)
+    hoja, _ = _hoja(nombre)
     hoja.append_rows([_renglon(nombre, r) for r in registros],
                      value_input_option="USER_ENTERED")
 
@@ -230,7 +262,7 @@ def reemplazar_varios_folios(nombre, folios, registros, conceptos=None):
     Va en bloque a propósito: una llamada por participante son más de cien
     peticiones seguidas y Google corta a las 60 escrituras por minuto.
     """
-    hoja = abrir_libro().worksheet(nombre)
+    hoja, valores = _hoja(nombre)
     cabecera = visibles(nombre)
     claves = internos(nombre)
     i_folio = claves.index("folio")
@@ -238,7 +270,7 @@ def reemplazar_varios_folios(nombre, folios, registros, conceptos=None):
 
     objetivo = set(folios)
     conservados = []
-    for fila in hoja.get_all_values()[1:]:
+    for fila in valores[1:]:
         if not any(c.strip() for c in fila):
             continue
         suyo = fila[i_folio] if len(fila) > i_folio else ""
@@ -262,8 +294,7 @@ def reemplazar_por_folio(nombre, folio, registros):
 
 def actualizar_participante(folio, registro):
     """Reescribe el renglón de un participante conservando su posición."""
-    hoja = abrir_libro().worksheet("PARTICIPANTES")
-    valores = hoja.get_all_values()
+    hoja, valores = _hoja("PARTICIPANTES")
     i_folio = internos("PARTICIPANTES").index("folio")
     for n, fila in enumerate(valores[1:], start=2):
         if len(fila) > i_folio and fila[i_folio] == folio:
@@ -411,13 +442,31 @@ def cuadro_general(cantidades):
     return fila
 
 
-def opcion(c):
-    """Lo que ve quien captura: el nombre del concepto y cuánto vale."""
-    texto = "%s — %g pts" % (NOMBRE[c.clave], c.puntos)
-    return texto + (" (máx. %g)" % c.tope_cantidad if c.tope_cantidad else "")
+def _opciones_legibles():
+    """
+    Lo que se ve en el selector: el nombre del concepto y lo que vale.
+
+    Sin el nombre del apartado delante — el selector ya está dentro de su
+    apartado y el prefijo sólo estorba. Sólo cuando dos conceptos quedarían
+    con el mismo texto se les antepone el factor para poder distinguirlos.
+    """
+    bruto = {}
+    for f in tb.FACTORES:
+        for c in f.conceptos:
+            texto = "%s — %g pts" % (c.etiqueta.strip(), c.puntos)
+            if c.tope_cantidad:
+                texto += " (máx. %g)" % c.tope_cantidad
+            bruto.setdefault(texto, []).append((f, c))
+
+    opciones = {}
+    for texto, grupo in bruto.items():
+        for f, c in grupo:
+            opciones[c.clave] = texto if len(grupo) == 1 \
+                else "%s · %s" % (f.etiqueta, texto)
+    return opciones
 
 
-OPCIONES = {c.clave: opcion(c) for f in tb.FACTORES for c in f.conceptos}
+OPCIONES = _opciones_legibles()
 DE_OPCION = {v: k for k, v in OPCIONES.items()}
 NADA = "— no precargar —"
 
@@ -685,18 +734,17 @@ with tab_val:
                                 if clave:
                                     nuevos.append({
                                         "folio": folio, "concepto": clave, "cantidad": 1,
-                                        "detalle": "Acreditado en Recategorización 2025"})
+                                        "detalle": ""})
                             anios = float(r["Años de servicio"] or 0)
                             if anios > 0:
                                 nuevos.append({
                                     "folio": folio, "concepto": CONCEPTO_ANIO.clave,
                                     "cantidad": anios,
-                                    "detalle": "Constancia de antigüedad"})
+                                    "detalle": ""})
                             for n in nuevos:
                                 n.update({"capturo": capturo.strip(),
                                           "actualizado": ahora(), "sin_valor": "",
-                                          "no_documento": "",
-                                          "notas": "Precargado de Recategorización 2025"})
+                                          "no_documento": "", "notas": ""})
                             renglones_puntajes.extend(nuevos)
 
                         try:
@@ -768,12 +816,12 @@ with tab_val:
             continue
         factor = next(f for f in tb.FACTORES if any(c.clave == clave for c in f.conceptos))
         renglones_previos[factor.clave].append({
-            "No.": str(r.get("no_documento", "")),
+            "No.": str(r.get("no_documento") or ""),
             "Concepto": OPCIONES[clave],
-            "Detalle": str(r.get("detalle", "")),
+            "Detalle": str(r.get("detalle") or ""),
             "Cantidad": float(r["cantidad"] or 0),
-            "Sin valor": str(r.get("sin_valor", "")).strip().lower() in ("sí", "si", "true", "1"),
-            "Notas y observaciones": str(r.get("notas", "")),
+            "Sin valor": str(r.get("sin_valor") or "").strip().lower() in ("sí", "si", "true", "1"),
+            "Notas y observaciones": str(r.get("notas") or ""),
         })
 
     capturado = {}
@@ -846,6 +894,15 @@ with tab_val:
             st.error("Anota en la barra lateral quién está capturando.")
         else:
             registros = []
+            # Números ya escritos a mano: no se reasignan.
+            ocupados = set()
+            for renglones in capturado.values():
+                for r in renglones:
+                    n = str(r.get("No.") or "").strip()
+                    if n.isdigit():
+                        ocupados.add(int(n))
+            siguiente = 1
+
             for renglones in capturado.values():
                 for r in renglones:
                     clave = DE_OPCION.get(str(r.get("Concepto", "")).strip())
@@ -857,11 +914,17 @@ with tab_val:
                     # Un documento sin valor se guarda aunque no sume puntos:
                     # desaparecerlo deja el expediente incompleto.
                     if clave and (cantidad > 0 or sin_valor):
+                        numero = str(r.get("No.") or "").strip()
+                        if not numero.isdigit():
+                            while siguiente in ocupados:
+                                siguiente += 1
+                            numero = str(siguiente)
+                            ocupados.add(siguiente)
                         registros.append({
                             "folio": folio_v, "concepto": clave, "cantidad": cantidad,
-                            "detalle": str(r.get("Detalle", "")).strip(),
-                            "no_documento": str(r.get("No.", "")).strip(),
-                            "notas": str(r.get("Notas y observaciones", "")).strip(),
+                            "detalle": str(r.get("Detalle") or "").strip(),
+                            "no_documento": numero,
+                            "notas": str(r.get("Notas y observaciones") or "").strip(),
                             "sin_valor": "Sí" if sin_valor else "",
                             "capturo": capturo.strip(), "actualizado": ahora()})
             reemplazar_por_folio("PUNTAJES", folio_v, registros)
