@@ -940,30 +940,40 @@ if hay_gente:
         # de expediente, porque lo asigna la Comisión conforme revisa.
         orden_alfabetico = df_part.sort_values("nombre")["folio"].tolist()
 
+        # Valorado NO es "tiene puntos": la precarga le puso formación y
+        # antigüedad a los 42. Valorado es que la Comisión ya revisó el
+        # expediente, y eso se sabe porque le asignó número de expediente.
+        expediente_de = {f: str(n).strip() for f, n
+                         in zip(df_part["folio"], df_part["no_expediente"])
+                         if str(n).strip()}
+
         def _rotulo_participante(f):
             """Nombre, expediente y estado. El estado va para que nadie vuelva
-            a valorar a quien ya quedó listo y se trabaje doble."""
+            a revisar a quien ya quedó listo y se trabaje doble."""
             fila = df_part.loc[df_part.folio == f].iloc[0]
             partes = [fila["nombre"]]
-            exp = str(fila.get("no_expediente", "")).strip()
-            if exp:
-                partes.append("exp. %s" % exp)
-            partes.append("✔ %g pts" % puntaje_de[f] if f in puntaje_de
-                          else "PENDIENTE")
+            if f in expediente_de:
+                partes.append("exp. %s" % expediente_de[f])
+                partes.append("✔ %g pts" % puntaje_de.get(f, 0))
+            else:
+                partes.append("PENDIENTE")
+                if f in puntaje_de:
+                    partes.append("precargado %g pts" % puntaje_de[f])
             return "  ·  ".join(partes)
 
-        hechos = sum(1 for f in orden_alfabetico if f in puntaje_de)
-        st.caption("Valorados **%d de %d**. En la lista, ✔ es expediente con "
-                   "puntaje guardado; PENDIENTE es el que falta."
-                   % (hechos, len(orden_alfabetico)))
+        hechos = sum(1 for f in orden_alfabetico if f in expediente_de)
+        st.caption("Revisados **%d de %d**. ✔ es expediente al que la Comisión "
+                   "ya le asignó número; PENDIENTE es el que falta. Lo que dice "
+                   "«precargado» son los puntos que trajo de Recategorización "
+                   "2025, todavía sin revisar." % (hechos, len(orden_alfabetico)))
 
         folio_v = st.selectbox("Participante a valorar", orden_alfabetico,
                                format_func=_rotulo_participante, key="folio_val")
 
-        if folio_v in puntaje_de:
-            st.warning("**Este expediente ya está valorado: %g puntos.** "
-                       "Si guardas, se reemplaza por completo lo que tenía."
-                       % puntaje_de[folio_v])
+        if folio_v in expediente_de:
+            st.warning("**Este expediente ya fue revisado: expediente %s, %g "
+                       "puntos.** Si guardas, se reemplaza por completo lo que "
+                       "tenía." % (expediente_de[folio_v], puntaje_de.get(folio_v, 0)))
 
         # Número de expediente: lo escribe quien revisa, en el orden que decida.
         fila_v = df_part.loc[df_part.folio == folio_v].iloc[0].to_dict()
