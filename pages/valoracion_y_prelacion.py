@@ -93,6 +93,7 @@ HOJAS = {
     ],
     "PUNTAJES": [
         ("folio", "Folio"),
+        ("apartado", "Apartado"),
         ("concepto_texto", "Concepto del tabulador"),
         ("concepto", "Clave del concepto"),
         ("cantidad", "Cantidad"),
@@ -237,8 +238,16 @@ def _renglon(nombre, registro):
     """Arma el renglón en el orden de la pestaña, llenando el texto legible
     del concepto a partir de su clave."""
     r = dict(registro)
-    if nombre == "PUNTAJES" and not r.get("concepto_texto"):
-        r["concepto_texto"] = NOMBRE.get(str(r.get("concepto", "")).strip(), "")
+    if nombre == "PUNTAJES":
+        clave = str(r.get("concepto", "")).strip()
+        # El nombre del concepto va tal cual lo escribe el Reglamento; el
+        # apartado al que pertenece va en su propia columna, no pegado.
+        r.setdefault("concepto_texto", "")
+        r.setdefault("apartado", "")
+        if not r["concepto_texto"]:
+            r["concepto_texto"] = ETIQUETA.get(clave, "")
+        if not r["apartado"]:
+            r["apartado"] = APARTADO_DE.get(clave, "")
     return [str(r.get(k, "")) for k in internos(nombre)]
 
 
@@ -310,6 +319,29 @@ def siguiente_folio(df, usados_ya=()):
     n = [int(f.split("-")[-1]) for f in todos
          if f.startswith("INC-2026-") and f.split("-")[-1].isdigit()]
     return "INC-2026-%03d" % ((max(n) + 1) if n else 1)
+
+
+def publicar_concentrado(tabla):
+    """
+    Escribe el concentrado horizontal en la pestaña RESULTADOS: una fila por
+    participante, una columna por apartado y el Total al final.
+
+    PUNTAJES guarda un renglón por documento porque cada uno lleva su número,
+    su detalle y sus notas. Esta pestaña es la vista horizontal de eso mismo.
+    """
+    libro = abrir_libro()
+    columnas = [str(c) for c in tabla.columns]
+    try:
+        hoja = libro.worksheet("RESULTADOS")
+    except gspread.WorksheetNotFound:
+        hoja = libro.add_worksheet(title="RESULTADOS", rows=max(len(tabla) + 20, 100),
+                                   cols=len(columnas) + 5)
+    if hoja.col_count < len(columnas):
+        hoja.add_cols(len(columnas) - hoja.col_count)
+    hoja.clear()
+    hoja.update([columnas] + tabla.astype(str).values.tolist(),
+                value_input_option="USER_ENTERED")
+    return len(tabla)
 
 
 def ahora():
@@ -469,6 +501,10 @@ def _opciones_legibles():
 OPCIONES = _opciones_legibles()
 DE_OPCION = {v: k for k, v in OPCIONES.items()}
 NADA = "— no precargar —"
+
+# Para el Sheet: el nombre del concepto y el apartado al que pertenece.
+ETIQUETA = {c.clave: c.etiqueta.strip() for f in tb.FACTORES for c in f.conceptos}
+APARTADO_DE = {c.clave: f.etiqueta for f in tb.FACTORES for c in f.conceptos}
 
 # Lo único que se arrastra de Recategorización 2025: el grado académico y los
 # años de servicio. Todo lo demás vuelve a cero por la Base PRIMERA.5.
@@ -1029,6 +1065,22 @@ with tab_pre:
         st.caption("Cada columna es un concepto del tabulador, con su nombre completo. "
                    "Trae los puntos en bruto, antes de los topes y de la regla de no "
                    "acumulación; las columnas de apartado y el Total son las que valen.")
+
+        st.divider()
+
+        # El concentrado horizontal, en el Sheet y no sólo en pantalla.
+        c_pub, c_msg = st.columns([1, 2])
+        if c_pub.button("Publicar el concentrado en el Sheet", type="primary",
+                        key="bpublicar"):
+            try:
+                n = publicar_concentrado(tabla)
+            except Exception as err:
+                st.error("No se pudo escribir la pestaña RESULTADOS: %s" % err)
+            else:
+                st.success("Pestaña RESULTADOS actualizada con %d participante(s)." % n)
+        c_msg.caption("Deja la pestaña **RESULTADOS** del Sheet igual a esta tabla: "
+                      "una fila por participante, una columna por apartado y el "
+                      "Total al final. Se reescribe completa cada vez.")
 
         st.divider()
         sello = datetime.now(TZ).strftime("%Y%m%d_%H%M")
