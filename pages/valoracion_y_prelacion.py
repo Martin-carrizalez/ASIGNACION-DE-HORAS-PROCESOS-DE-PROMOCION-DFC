@@ -93,6 +93,8 @@ HOJAS = {
     ],
     "PUNTAJES": [
         ("folio", "Folio"),
+        ("rfc", "R.F.C."),
+        ("nombre", "Nombre del participante"),
         ("apartado", "Apartado"),
         ("concepto_texto", "Concepto del tabulador"),
         ("concepto", "Clave del concepto"),
@@ -147,6 +149,25 @@ def abrir_libro():
     return libro
 
 
+def _escribir_encima(hoja, filas, renglones_antes, ancho):
+    """
+    Deja la pestaña con exactamente estos renglones, sin vaciarla primero.
+
+    Vaciar y volver a escribir deja una ventana en la que la pestaña está en
+    blanco: si la conexión se cae justo ahí, se pierde lo capturado. Aquí se
+    escribe encima y después se recortan los renglones que sobraron, así que
+    en ningún momento hay menos datos de los que debe haber.
+
+    Cada renglón se rellena hasta el ancho del encabezado para que no queden
+    celdas viejas asomando a la derecha.
+    """
+    parejas = [list(f) + [""] * (ancho - len(f)) for f in filas]
+    hoja.update(parejas, "A1", value_input_option="USER_ENTERED")
+    sobrantes = renglones_antes - len(parejas)
+    if sobrantes > 0:
+        hoja.delete_rows(len(parejas) + 1, renglones_antes)
+
+
 def _parece_encabezado(nombre, fila):
     """¿El renglón 1 es un encabezado y no un registro?"""
     llenas = [c.strip() for c in fila if c.strip()]
@@ -192,9 +213,9 @@ def _hoja(nombre):
 
     if hoja.col_count < len(cabecera):
         hoja.add_cols(len(cabecera) - hoja.col_count)
-    hoja.clear()
-    hoja.update([cabecera] + filas, value_input_option="USER_ENTERED")
-    return hoja, [cabecera] + filas
+    nuevas = [cabecera] + filas
+    _escribir_encima(hoja, nuevas, len(valores), len(cabecera))
+    return hoja, nuevas
 
 
 @st.cache_data(show_spinner=False)
@@ -281,9 +302,8 @@ def reemplazar_varios_folios(nombre, folios, registros, conceptos=None):
             if clave not in conceptos:
                 conservados.append(fila)        # de otro apartado: se respeta
 
-    hoja.clear()
-    hoja.update([cabecera] + conservados + [_renglon(nombre, r) for r in registros],
-                value_input_option="USER_ENTERED")
+    nuevas = [cabecera] + conservados + [_renglon(nombre, r) for r in registros]
+    _escribir_encima(hoja, nuevas, len(valores), len(cabecera))
 
 
 def reemplazar_por_folio(nombre, folio, registros):
@@ -328,9 +348,9 @@ def publicar_concentrado(tabla):
                                    cols=len(columnas) + 5)
     if hoja.col_count < len(columnas):
         hoja.add_cols(len(columnas) - hoja.col_count)
-    hoja.clear()
-    hoja.update([columnas] + tabla.astype(str).values.tolist(),
-                value_input_option="USER_ENTERED")
+    antes = len(hoja.get_all_values())
+    _escribir_encima(hoja, [columnas] + tabla.astype(str).values.tolist(),
+                     antes, len(columnas))
     return len(tabla)
 
 
@@ -508,6 +528,23 @@ CLAVES_PRECARGA = {c.clave for c in CONCEPTOS_FORMACION} | (
     {CONCEPTO_ANIO.clave} if CONCEPTO_ANIO else set())
 
 
+def cantidad_de(valor, por_defecto=1.0):
+    """
+    Cuántos documentos ampara el renglón.
+
+    Un renglón recién agregado llega con la celda vacía. Si ya se eligió el
+    concepto, lo que quiso decir quien captura es «uno»; descartarlo en
+    silencio hacía que la valoración se guardara sin ese documento.
+    """
+    try:
+        n = float(valor)
+    except (TypeError, ValueError):
+        return por_defecto
+    if n != n:                 # NaN: la celda quedó vacía
+        return por_defecto
+    return n
+
+
 def cantidades_de(renglones):
     """Suma los renglones por concepto: 3 cursos de 40 h capturados por
     separado son lo mismo que un renglón con cantidad 3."""
@@ -518,10 +555,7 @@ def cantidades_de(renglones):
         clave = DE_OPCION.get(str(r.get("Concepto", "")).strip())
         if not clave:
             continue
-        try:
-            cantidad = float(r.get("Cantidad") or 0)
-        except (TypeError, ValueError):
-            continue
+        cantidad = cantidad_de(r.get("Cantidad"))
         if cantidad > 0:
             total[clave] = total.get(clave, 0) + cantidad
     return total
@@ -794,14 +828,16 @@ with tab_val:
                                 clave = DE_OPCION.get(str(r[columna]).strip())
                                 if clave:
                                     nuevos.append({
-                                        "folio": folio, "concepto": clave, "cantidad": 1,
-                                        "detalle": ""})
+                                        "folio": folio, "rfc": rfc,
+                                        "nombre": str(r["Nombre completo"]).strip().upper(),
+                                        "concepto": clave, "cantidad": 1, "detalle": ""})
                             anios = float(r["Años de servicio"] or 0)
                             if anios > 0:
                                 nuevos.append({
-                                    "folio": folio, "concepto": CONCEPTO_ANIO.clave,
-                                    "cantidad": anios,
-                                    "detalle": ""})
+                                    "folio": folio, "rfc": rfc,
+                                    "nombre": str(r["Nombre completo"]).strip().upper(),
+                                    "concepto": CONCEPTO_ANIO.clave,
+                                    "cantidad": anios, "detalle": ""})
                             for n in nuevos:
                                 n.update({"capturo": capturo.strip(),
                                           "actualizado": ahora(), "sin_valor": "",
