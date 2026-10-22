@@ -639,6 +639,33 @@ _con_puntos = df_punt[df_punt["sin_valor"].astype(str).str.strip() == ""] \
 st.sidebar.metric("Expedientes valorados",
                   _con_puntos["folio"].nunique() if not _con_puntos.empty else 0)
 
+# La precarga es cosa de una vez; estorbaba arriba de la captura. Vive al
+# final de la barra lateral y sólo toma la pantalla cuando hay archivo puesto.
+st.sidebar.divider()
+st.sidebar.markdown("##### Precarga de Recategorización 2025")
+st.sidebar.caption("Sólo al inicio del proceso. Da de alta a los participantes "
+                   "y escribe los incisos a) y c).")
+archivo = st.sidebar.file_uploader("Precarga_Incremento_2026.xlsx", type="xlsx",
+                                   key="archivo_precarga")
+
+# Quién ya tiene puntos: evita volver a valorar a alguien por descuido.
+puntaje_de = {}
+if not df_punt.empty:
+    for folio_p, grupo in df_punt.groupby("folio"):
+        cant = {}
+        for _, p in grupo.iterrows():
+            if str(p.get("sin_valor", "")).strip():
+                continue
+            clave = str(p["concepto"]).strip()
+            try:
+                n = float(p["cantidad"] or 0)
+            except (TypeError, ValueError):
+                continue
+            if clave and n > 0:
+                cant[clave] = cant.get(clave, 0) + n
+        if cant:
+            puntaje_de[folio_p] = tb.desglose(cant)["TOTAL"]
+
 tab_val, tab_pre = st.tabs(["1 · Valoración", "2 · Prelación"])
 
 
@@ -658,14 +685,12 @@ with tab_val:
     #
     # Siempre abierto: es la única puerta de alta de participantes, porque la
     # pestaña de Recepción ya no existe. Plegado no se ve y no se encuentra.
-    with st.container(border=True):
-        st.markdown("#### Cargar el archivo de precarga")
-        st.caption("Sube aquí **Precarga_Incremento_2026.xlsx** ya revisado. Da de "
-                   "alta a los participantes que falten (empareja por R.F.C.) y "
-                   "escribe los incisos a) Formación académica y c) Antigüedad. "
-                   "Los apartados b) a g) no se tocan.")
-        archivo = st.file_uploader("Archivo de precarga (.xlsx)", type="xlsx",
-                                   key="archivo_precarga")
+    if archivo is not None:
+        st.markdown("#### Precarga de Recategorización 2025")
+        st.caption("Da de alta a los participantes que falten (empareja por "
+                   "R.F.C.) y escribe los incisos a) Formación académica y "
+                   "c) Antigüedad. Los apartados b) a g) no se tocan. "
+                   "Quita el archivo de la barra lateral para volver a capturar.")
 
         if CONCEPTO_ANIO is None:
             st.error("tabulador.py no expone un concepto de antigüedad; no puedo "
@@ -807,8 +832,8 @@ with tab_val:
 
     # st.stop() aquí dentro detendría el script completo y dejaría la pestaña
     # de Prelación en blanco sin explicación. Se salta sólo esta sección.
-    hay_gente = not df_part.empty
-    if not hay_gente:
+    hay_gente = not df_part.empty and archivo is None
+    if df_part.empty:
         st.info("Todavía no hay participantes registrados. Sube el archivo de "
                 "precarga aquí arriba para darlos de alta; de ahí en adelante "
                 "aparecen en esta lista.")
