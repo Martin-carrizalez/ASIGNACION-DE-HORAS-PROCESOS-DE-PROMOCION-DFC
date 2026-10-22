@@ -54,73 +54,81 @@ TZ = pytz.timezone("America/Mexico_City")
 # --- Catálogos de la convocatoria -----------------------------------------
 # Se conservan porque definen las columnas de la pestaña PARTICIPANTES, que
 # esta página sigue leyendo. El contrato con el Sheet no cambia.
-CCTS = ["14ADG1075P — Dirección de Formación Continua",
-        "14FMP0001B — Centro Estatal de Profesionalización Docente"]
-
-CATEGORIAS = ["Asociado", "Titular"]
-NIVELES = ["A", "B", "C"]
-
-REQUISITOS = [
-    ("REQ_01", "Adscrito a la DFC (14ADG1075P) o al CEPD (14FMP0001B)", "Base PRIMERA.6"),
-    ("REQ_02", "Plaza con nombramiento Código 10, alta definitiva", "Art. 4; Base PRIMERA.6"),
-    ("REQ_03", "Desempeña funciones académicas, directivas o técnico pedagógicas acreditadas con constancia", "Art. 9; Base PRIMERA.7"),
-    ("REQ_04", "Cumple los requisitos de categoría y nivel del Art. 13 o del Adendum", "Art. 13 y Adendum"),
-    ("REQ_05", "Si invoca formación equivalente: se verificó que no hubiere participantes con la formación requerida", "Art. 9 reformado"),
-    ("REQ_06", "Sin demanda legal pendiente contra la SEJ por asuntos laborales", "Art. 12; Base PRIMERA.9"),
-    ("REQ_07", "Si goza de licencia sin goce de sueldo: acredita haber reactivado su(s) clave(s) de base", "Art. 8 reformado"),
-    ("REQ_08", "Si obtuvo promoción previa: transcurrió un año, salvo que no haya participantes", "Art. 17 reformado"),
-    ("REQ_09", "Las horas solicitadas están entre 1 y 15", "Art. 14 Primera b); Base PRIMERA.10"),
-    ("REQ_10", "Constancias posteriores a la última promoción y no presentadas en recategorización", "Base PRIMERA.5"),
-]
-
-DOCUMENTOS = [
-    ("DOC_01", "Solicitud de participación por duplicado, firmada"),
-    ("DOC_02", "Identificación oficial"),
-    ("DOC_03", "Formación académica (grado o título)"),
-    ("DOC_04", "Experiencia docente o profesional"),
-    ("DOC_05", "Talón de cheque reciente"),
-    ("DOC_06", "Dictamen de homologación de plaza de origen (si aplica)"),
-    ("DOC_07", "Constancia de antigüedad del Depto. de Registros y Archivo"),
-    ("DOC_08", "Constancia de funciones de áreas sustantivas firmada por la Dirección (Art. 9)"),
-    ("DOC_09", "Relación escrita de los documentos entregados"),
-]
-
 ESTATUS = ["RECIBIDA", "RECIBIDA CON FALTANTES", "SUBSANADA", "IMPROCEDENTE"]
 
-# Encabezados de cada pestaña de la hoja. El orden es el contrato con el Sheet:
-# si se agrega una columna, va al final, nunca en medio.
-COLS_PARTICIPANTES = (
-    ["folio", "fecha_recepcion", "nombre", "rfc", "curp", "cct", "correo", "telefono",
-     "categoria_actual", "nivel_actual", "horas_actuales", "fecha_ultima_promocion",
-     "horas_solicitadas", "estatus"]
-    + [k for k, _, _ in REQUISITOS]
-    + [k for k, _ in DOCUMENTOS]
-    + ["observaciones", "capturo", "actualizado"]
-    # El número de expediente lo pone la Comisión conforme va revisando, en el
-    # orden que ella decida. No se asigna solo: el folio INC-2026-NNN es sólo
-    # la llave interna del Sheet y no se enseña como número de expediente.
-    + ["no_expediente"]
-)
-COLS_CONVOCATORIAS = ["folio", "no_convocatoria", "categoria", "nivel",
-                      "clave_presupuestal", "horas_vacante"]
-# Las columnas nuevas van al final, en este orden:
-#   detalle       nombre del documento que ampara el renglón
-#   no_documento  su número consecutivo en la relación de documentos, el que
-#                 las hojas individuales citan en las notas ("Documento 6,
-#                 16, 17 sin valor")
-#   notas         notas y observaciones del renglón
-#   sin_valor     documento recibido que no puntúa; se conserva en el
-#                 expediente con cero puntos en vez de desaparecer, que es
-#                 lo que permite defenderlo en una reconsideración
-# Los renglones viejos las traen vacías y siguen sirviendo.
-COLS_PUNTAJES = ["folio", "concepto", "cantidad", "capturo", "actualizado",
-                 "detalle", "no_documento", "notas", "sin_valor"]
-
+# Encabezados de cada pestaña. A la izquierda el nombre interno que usa el
+# código; a la derecha el que se lee al abrir la hoja de cálculo. Nadie que
+# abra el Sheet tiene por qué descifrar abreviaturas.
+#
+# Las columnas de requisitos y documentos de la recepción se retiraron: esa
+# etapa ya no se captura desde aquí y sólo dejaban columnas vacías.
 HOJAS = {
-    "PARTICIPANTES": COLS_PARTICIPANTES,
-    "CONVOCATORIAS": COLS_CONVOCATORIAS,
-    "PUNTAJES": COLS_PUNTAJES,
+    "PARTICIPANTES": [
+        ("folio", "Folio"),
+        ("no_expediente", "No. de expediente"),
+        ("nombre", "Nombre del participante"),
+        ("rfc", "R.F.C."),
+        ("curp", "C.U.R.P."),
+        ("cct", "Centro de trabajo"),
+        ("correo", "Correo electrónico"),
+        ("telefono", "Teléfono"),
+        ("categoria_actual", "Categoría actual"),
+        ("nivel_actual", "Nivel actual"),
+        ("horas_actuales", "Horas actuales"),
+        ("fecha_ultima_promocion", "Fecha de última promoción"),
+        ("horas_solicitadas", "Horas solicitadas"),
+        ("estatus", "Estatus de la solicitud"),
+        ("observaciones", "Observaciones"),
+        ("fecha_recepcion", "Fecha de recepción"),
+        ("capturo", "Capturó"),
+        ("actualizado", "Última actualización"),
+    ],
+    "CONVOCATORIAS": [
+        ("folio", "Folio"),
+        ("no_convocatoria", "No. de convocatoria"),
+        ("categoria", "Categoría"),
+        ("nivel", "Nivel"),
+        ("clave_presupuestal", "Clave presupuestal"),
+        ("horas_vacante", "Horas de la vacante"),
+    ],
+    "PUNTAJES": [
+        ("folio", "Folio"),
+        ("concepto_texto", "Concepto del tabulador"),
+        ("concepto", "Clave del concepto"),
+        ("cantidad", "Cantidad"),
+        ("detalle", "Detalle del documento"),
+        ("no_documento", "No. de documento"),
+        ("notas", "Notas y observaciones"),
+        ("sin_valor", "Documento sin valor"),
+        ("capturo", "Capturó"),
+        ("actualizado", "Última actualización"),
+    ],
 }
+
+# Nombres con los que una columna pudo haberse guardado antes. Sirven para
+# reacomodar una pestaña vieja sin perder lo capturado.
+ANTERIORES = {"capturo": ("capturo",), "actualizado": ("actualizado",),
+              "no_documento": ("no_documento",), "notas": ("notas",),
+              "sin_valor": ("sin_valor",), "detalle": ("detalle",),
+              "concepto": ("concepto",), "no_expediente": ("no_expediente",)}
+
+
+def internos(nombre):
+    return [a for a, _ in HOJAS[nombre]]
+
+
+def visibles(nombre):
+    return [b for _, b in HOJAS[nombre]]
+
+
+def columna_interna(nombre, encabezado):
+    """Del texto de un encabezado al nombre interno que le corresponde."""
+    for interno, visible in HOJAS[nombre]:
+        if encabezado == visible or encabezado == interno:
+            return interno
+        if encabezado in ANTERIORES.get(interno, ()):
+            return interno
+    return None
 
 
 # =========================================================================
@@ -129,9 +137,14 @@ HOJAS = {
 
 @st.cache_resource(show_spinner=False)
 def abrir_libro():
-    """Abre el Sheet, crea las pestañas que falten y agrega al final las
-    columnas nuevas que una pestaña ya existente todavía no tenga. Nunca
-    reordena ni borra columnas: lo capturado se conserva."""
+    """
+    Abre el Sheet y deja cada pestaña con los encabezados legibles.
+
+    Si una pestaña viene de una versión anterior —con los nombres internos o
+    sin las columnas nuevas— se reacomoda una sola vez: se leen sus renglones
+    por nombre de columna y se vuelven a escribir en el orden actual. Nada se
+    pierde y ninguna columna se adivina por posición.
+    """
     alcances = ["https://www.googleapis.com/auth/spreadsheets",
                 "https://www.googleapis.com/auth/drive"]
     cred = Credentials.from_service_account_info(
@@ -140,50 +153,122 @@ def abrir_libro():
         st.secrets["registro_incremento"]["sheet_id"])
 
     existentes = {h.title for h in libro.worksheets()}
-    for nombre, cols in HOJAS.items():
+    for nombre in HOJAS:
+        cabecera = visibles(nombre)
         if nombre not in existentes:
-            hoja = libro.add_worksheet(title=nombre, rows=500, cols=len(cols) + 5)
-            hoja.append_row(cols)
+            hoja = libro.add_worksheet(title=nombre, rows=500,
+                                       cols=len(cabecera) + 5)
+            hoja.append_row(cabecera)
             continue
 
         hoja = libro.worksheet(nombre)
-        encabezado = hoja.row_values(1)
-        if not encabezado:
-            hoja.append_row(cols)
+        valores = hoja.get_all_values()
+        if not valores or not any(c.strip() for c in valores[0]):
+            hoja.update([cabecera], "A1", value_input_option="USER_ENTERED")
             continue
-        faltantes = [c for c in cols if c not in encabezado]
-        if faltantes:
-            completo = encabezado + faltantes
-            if hoja.col_count < len(completo):
-                hoja.add_cols(len(completo) - hoja.col_count)
-            hoja.update([completo], "A1", value_input_option="USER_ENTERED")
+        if valores[0] == cabecera:
+            continue
+
+        # Reacomodo: cada renglón se reconstruye por nombre de columna.
+        viejos = [columna_interna(nombre, c.strip()) for c in valores[0]]
+        filas = []
+        for fila in valores[1:]:
+            if not any(c.strip() for c in fila):
+                continue
+            por_interno = {k: (fila[j] if j < len(fila) else "")
+                           for j, k in enumerate(viejos) if k}
+            filas.append([por_interno.get(k, "") for k in internos(nombre)])
+        if hoja.col_count < len(cabecera):
+            hoja.add_cols(len(cabecera) - hoja.col_count)
+        hoja.clear()
+        hoja.update([cabecera] + filas, value_input_option="USER_ENTERED")
     return libro
 
 
 def leer(nombre):
-    """Lee una pestaña completa como DataFrame, respetando sus columnas."""
+    """Lee una pestaña completa con los nombres internos como columnas."""
     hoja = abrir_libro().worksheet(nombre)
-    datos = hoja.get_all_records()
-    df = pd.DataFrame(datos, columns=HOJAS[nombre]) if datos else pd.DataFrame(columns=HOJAS[nombre])
+    valores = hoja.get_all_values()
+    claves = [columna_interna(nombre, c.strip()) for c in valores[0]] if valores else []
+    filas = []
+    for fila in valores[1:]:
+        if not any(c.strip() for c in fila):
+            continue
+        filas.append({k: (fila[j] if j < len(fila) else "")
+                      for j, k in enumerate(claves) if k})
+    df = pd.DataFrame(filas, columns=internos(nombre)) if filas \
+        else pd.DataFrame(columns=internos(nombre))
     return df.fillna("")
 
 
-def agregar(nombre, registro):
-    """Agrega un renglón al final, en el orden de las columnas de la pestaña."""
+def _renglon(nombre, registro):
+    """Arma el renglón en el orden de la pestaña, llenando el texto legible
+    del concepto a partir de su clave."""
+    r = dict(registro)
+    if nombre == "PUNTAJES" and not r.get("concepto_texto"):
+        r["concepto_texto"] = NOMBRE.get(str(r.get("concepto", "")).strip(), "")
+    return [str(r.get(k, "")) for k in internos(nombre)]
+
+
+def agregar_varios(nombre, registros):
+    """Agrega muchos renglones en una sola petición."""
+    if not registros:
+        return
     hoja = abrir_libro().worksheet(nombre)
-    hoja.append_row([str(registro.get(c, "")) for c in HOJAS[nombre]],
-                    value_input_option="USER_ENTERED")
+    hoja.append_rows([_renglon(nombre, r) for r in registros],
+                     value_input_option="USER_ENTERED")
+
+
+def reemplazar_varios_folios(nombre, folios, registros, conceptos=None):
+    """
+    Reescribe la pestaña completa en UNA petición.
+
+    De los folios indicados se quitan los renglones viejos —todos, o sólo los
+    de los conceptos que se listen— y se agregan los nuevos. Lo de los demás
+    folios no se toca.
+
+    Va en bloque a propósito: una llamada por participante son más de cien
+    peticiones seguidas y Google corta a las 60 escrituras por minuto.
+    """
+    hoja = abrir_libro().worksheet(nombre)
+    cabecera = visibles(nombre)
+    claves = internos(nombre)
+    i_folio = claves.index("folio")
+    i_concepto = claves.index("concepto") if "concepto" in claves else None
+
+    objetivo = set(folios)
+    conservados = []
+    for fila in hoja.get_all_values()[1:]:
+        if not any(c.strip() for c in fila):
+            continue
+        suyo = fila[i_folio] if len(fila) > i_folio else ""
+        if suyo not in objetivo:
+            conservados.append(fila)
+            continue
+        if conceptos is not None and i_concepto is not None:
+            clave = fila[i_concepto].strip() if len(fila) > i_concepto else ""
+            if clave not in conceptos:
+                conservados.append(fila)        # de otro apartado: se respeta
+
+    hoja.clear()
+    hoja.update([cabecera] + conservados + [_renglon(nombre, r) for r in registros],
+                value_input_option="USER_ENTERED")
+
+
+def reemplazar_por_folio(nombre, folio, registros):
+    """Borra los renglones de un folio y escribe los nuevos."""
+    reemplazar_varios_folios(nombre, [folio], registros)
 
 
 def actualizar_participante(folio, registro):
     """Reescribe el renglón de un participante conservando su posición."""
     hoja = abrir_libro().worksheet("PARTICIPANTES")
     valores = hoja.get_all_values()
-    i_folio = valores[0].index("folio")
+    i_folio = internos("PARTICIPANTES").index("folio")
     for n, fila in enumerate(valores[1:], start=2):
         if len(fila) > i_folio and fila[i_folio] == folio:
-            hoja.update([[str(registro.get(c, "")) for c in COLS_PARTICIPANTES]],
-                        f"A{n}", value_input_option="USER_ENTERED")
+            hoja.update([_renglon("PARTICIPANTES", registro)], f"A{n}",
+                        value_input_option="USER_ENTERED")
             return True
     return False
 
@@ -194,24 +279,6 @@ def siguiente_folio(df, usados_ya=()):
     n = [int(f.split("-")[-1]) for f in todos
          if f.startswith("INC-2026-") and f.split("-")[-1].isdigit()]
     return "INC-2026-%03d" % ((max(n) + 1) if n else 1)
-
-
-def reemplazar_por_folio(nombre, folio, registros):
-    """
-    Borra los renglones de un folio y escribe los nuevos.
-    Se usa para convocatorias y puntajes, que se recapturan en bloque.
-    """
-    hoja = abrir_libro().worksheet(nombre)
-    valores = hoja.get_all_values()
-    if valores:
-        encabezado, cuerpo = valores[0], valores[1:]
-        i_folio = encabezado.index("folio")
-        conservados = [r for r in cuerpo if (r[i_folio] if len(r) > i_folio else "") != folio]
-    else:
-        encabezado, conservados = HOJAS[nombre], []
-    nuevos = [[str(r.get(c, "")) for c in HOJAS[nombre]] for r in registros]
-    hoja.clear()
-    hoja.update([encabezado] + conservados + nuevos, value_input_option="USER_ENTERED")
 
 
 def ahora():
@@ -584,8 +651,14 @@ with tab_val:
                     if not capturo.strip():
                         st.error("Anota en la barra lateral quién está capturando.")
                     else:
-                        altas = cargados = 0
+                        # Todo se arma en memoria y se escribe de un solo viaje.
+                        # Una llamada por participante son más de cien peticiones
+                        # seguidas y Google corta a las 60 escrituras por minuto.
+                        altas_participantes = []
+                        renglones_puntajes = []
+                        folios_tocados = []
                         nuevos_folios = []
+
                         for r in revisado.to_dict("records"):
                             if not r["Cargar"]:
                                 continue
@@ -597,21 +670,15 @@ with tab_val:
                                 # revisar, en el orden que ella decida.
                                 folio = siguiente_folio(df_part, nuevos_folios)
                                 nuevos_folios.append(folio)
-                                agregar("PARTICIPANTES", {
+                                altas_participantes.append({
                                     "folio": folio, "fecha_recepcion": ahora(),
                                     "nombre": str(r["Nombre completo"]).strip().upper(),
                                     "rfc": rfc, "estatus": ESTATUS[0],
                                     "horas_solicitadas": r.get("Horas solicitadas", ""),
                                     "no_expediente": "",
                                     "capturo": capturo.strip(), "actualizado": ahora()})
-                                altas += 1
 
-                            # Se conserva lo capturado de los demás apartados;
-                            # sólo se reemplazan los renglones de a) y c).
-                            viejos = [
-                                {c: p[c] for c in COLS_PUNTAJES}
-                                for _, p in df_punt[df_punt.folio == folio].iterrows()
-                                if str(p["concepto"]).strip() not in CLAVES_PRECARGA]
+                            folios_tocados.append(folio)
                             nuevos = []
                             for columna in ("Estudios en educación", "Otros estudios"):
                                 clave = DE_OPCION.get(str(r[columna]).strip())
@@ -630,13 +697,27 @@ with tab_val:
                                           "actualizado": ahora(), "sin_valor": "",
                                           "no_documento": "",
                                           "notas": "Precargado de Recategorización 2025"})
-                            if nuevos or viejos:
-                                reemplazar_por_folio("PUNTAJES", folio, viejos + nuevos)
-                            cargados += 1
-                        st.success("%d participante(s) procesados, %d dados de alta. "
-                                   "El número de expediente queda en blanco: se asigna "
-                                   "al revisar." % (cargados, altas))
-                        st.rerun()
+                            renglones_puntajes.extend(nuevos)
+
+                        try:
+                            if altas_participantes:
+                                agregar_varios("PARTICIPANTES", altas_participantes)
+                            if folios_tocados:
+                                # Conserva lo capturado de los demás apartados y
+                                # reemplaza sólo los renglones de a) y c).
+                                reemplazar_varios_folios(
+                                    "PUNTAJES", folios_tocados, renglones_puntajes,
+                                    conceptos=CLAVES_PRECARGA)
+                        except Exception as err:
+                            st.error("No se pudo escribir en el Sheet: %s" % err)
+                        else:
+                            st.success(
+                                "%d participante(s) procesados, %d dados de alta, "
+                                "%d renglón(es) de puntaje escritos. El número de "
+                                "expediente queda en blanco: se asigna al revisar."
+                                % (len(folios_tocados), len(altas_participantes),
+                                   len(renglones_puntajes)))
+                            st.rerun()
 
 
     if df_part.empty:
