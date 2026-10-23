@@ -907,8 +907,9 @@ if seccion == REGISTRO:
                 mayor = max((c for c in CATEGORIAS if horas_por_categoria[c] > 0),
                             key=CATEGORIAS.index)
                 categoria, nivel = mayor.rsplit(" ", 1)
+                folio_nuevo = siguiente_folio(df_part)
                 agregar_varios("PARTICIPANTES", [{
-                    "folio": siguiente_folio(df_part),
+                    "folio": folio_nuevo,
                     "fecha_recepcion": ahora(), "nombre": nombre_alta,
                     "rfc": rfc_alta, "estatus": ESTATUS[0], "no_expediente": "",
                     "categoria_actual": categoria, "nivel_actual": nivel,
@@ -921,8 +922,11 @@ if seccion == REGISTRO:
                 st.error("No se pudo dar de alta: %s" % err)
             else:
                 olvidar_lo_leido()
-                avisar("%s dado(a) de alta. Ya aparece en la pestaña de "
-                       "Valoración." % nombre_alta)
+                # Queda seleccionado en Valoración: se registra y se valora de
+                # inmediato, uno por uno, sin tener que buscarlo en la lista.
+                st.session_state["folio_val"] = folio_nuevo
+                avisar("%s dado(a) de alta. En la sección 2 · Valoración ya "
+                       "aparece hasta arriba y seleccionado." % nombre_alta)
                 st.rerun()
 
     st.divider()
@@ -961,9 +965,10 @@ if seccion == VALORACION:
 # detendría el script completo y dejaría la sección de Prelación en blanco.
 if hay_gente:
     if seccion == VALORACION:
-        # Se elige por nombre, en orden alfabético: todavía puede no haber número
-        # de expediente, porque lo asigna la Comisión conforme revisa.
-        orden_alfabetico = df_part.sort_values("nombre")["folio"].tolist()
+        # El último registrado va hasta arriba: se registra y se valora de
+        # inmediato. El folio es consecutivo, así que ordenarlo al revés es
+        # exactamente el orden de registro, del más nuevo al más viejo.
+        orden_alfabetico = sorted(df_part["folio"].tolist(), reverse=True)
 
         # Revisado no es "tiene puntos": alguien puede tener documentos a
         # medio capturar. Revisado es que la Comisión cerró el expediente, y
@@ -987,9 +992,10 @@ if hay_gente:
             return "  ·  ".join(partes)
 
         hechos = sum(1 for f in orden_alfabetico if f in expediente_de)
-        st.caption("Revisados **%d de %d**. ✔ es expediente al que la Comisión "
-                   "ya le asignó número; PENDIENTE es el que falta. Los puntos "
-                   "de un PENDIENTE son lo que lleve capturado hasta ahora."
+        st.caption("Revisados **%d de %d**. La lista va del último registrado "
+                   "al primero, así que el que acabas de dar de alta queda "
+                   "hasta arriba. ✔ es expediente al que la Comisión ya le "
+                   "asignó número; PENDIENTE es el que falta."
                    % (hechos, len(orden_alfabetico)))
 
         folio_v = st.selectbox("Participante a valorar", orden_alfabetico,
@@ -1084,13 +1090,21 @@ if hay_gente:
                             "No.", width="small",
                             help="Número del documento en la relación que entregó "
                                  "el participante. Es el que se cita en las notas."),
+                        # Cuando el apartado tiene un solo concepto —c)
+                        # Antigüedad, por ejemplo— viene ya elegido: no hay
+                        # nada que escoger y sólo falta escribir la cantidad.
                         "Concepto": st.column_config.SelectboxColumn(
                             "Concepto del tabulador", options=opciones,
-                            width="large", required=True),
+                            width="large", required=True,
+                            default=opciones[0] if len(opciones) == 1 else None),
                         "Detalle": st.column_config.TextColumn(
                             "Detalle (nombre del documento)", width="medium"),
                         "Cantidad": st.column_config.NumberColumn(
-                            "Cantidad", min_value=0.0, step=1.0, default=1.0, width="small"),
+                            # En Antigüedad la cantidad son los años de
+                            # servicio, no un número de documentos.
+                            "Años" if len(opciones) == 1 and
+                            "año" in opciones[0].lower() else "Cantidad",
+                            min_value=0.0, step=1.0, default=1.0, width="small"),
                         "Sin valor": st.column_config.CheckboxColumn(
                             "Sin valor", default=False,
                             help="Documento recibido que no puntúa. Se conserva en "
