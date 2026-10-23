@@ -834,12 +834,21 @@ if not df_punt.empty:
         if cant:
             puntaje_de[folio_p] = tb.desglose(cant)["TOTAL"]
 
-tab_reg, tab_val, tab_pre = st.tabs(
-    ["1 · Registro", "2 · Valoración", "3 · Prelación"])
+# Secciones. No se usa st.tabs: pierde la pestaña activa en cada st.rerun() y
+# devuelve al operador a la primera a media captura. Un radio con key conserva
+# dónde estaba.
+REGISTRO, VALORACION, PRELACION = ("1 · Registro", "2 · Valoración",
+                                   "3 · Prelación")
+seccion = st.radio("Sección", [REGISTRO, VALORACION, PRELACION],
+                   horizontal=True, key="seccion", label_visibility="collapsed")
+st.divider()
+
+# Se calcula aquí, fuera de las secciones: lo consultan dos bloques distintos.
+hay_gente = not df_part.empty
 
 
 # --- 1. REGISTRO ----------------------------------------------------------
-with tab_reg:
+if seccion == REGISTRO:
     st.subheader("Registro de participantes")
     st.caption("La lista se arma a mano, conforme se reciben los expedientes. "
                "No se carga nada de procesos anteriores.")
@@ -939,22 +948,19 @@ with tab_reg:
 
 
 # --- 2. VALORACIÓN --------------------------------------------------------
-with tab_val:
+if seccion == VALORACION:
     st.subheader("Valoración conforme al Tabulador de Factores y Puntajes")
     st.caption("Título Octavo, Art. 43 del Reglamento. Sólo se valoran actividades "
                "posteriores a la última promoción (Base PRIMERA.5).")
 
-    if df_part.empty:
+    if not hay_gente:
         st.info("Todavía no hay participantes registrados. Dalos de alta en la "
-                "pestaña 1 · Registro.")
+                "sección 1 · Registro.")
 
-
-    # st.stop() aquí dentro detendría el script completo y dejaría la pestaña
-    # de Prelación en blanco sin explicación. Se salta sólo esta sección.
-    hay_gente = not df_part.empty
-
+# La captura se salta cuando no hay a quién valorar. No se usa st.stop():
+# detendría el script completo y dejaría la sección de Prelación en blanco.
 if hay_gente:
-    with tab_val:
+    if seccion == VALORACION:
         # Se elige por nombre, en orden alfabético: todavía puede no haber número
         # de expediente, porque lo asigna la Comisión conforme revisa.
         orden_alfabetico = df_part.sort_values("nombre")["folio"].tolist()
@@ -1008,9 +1014,25 @@ if hay_gente:
                 fila_v["actualizado"] = ahora()
                 actualizar_participante(folio_v, fila_v)
                 olvidar_lo_leido()
-                avisar("Expediente %s asignado a %s."
-                       % (exp_nuevo.strip(), fila_v.get("nombre", "")))
-                st.rerun()
+                # Sin st.rerun(): recargar aquí reconstruiría las tablas de
+                # captura desde el Sheet y se perdería lo escrito sin guardar.
+                # Se actualiza en memoria lo poco que cambió.
+                df_part.loc[df_part.folio == folio_v, "no_expediente"] = \
+                    exp_nuevo.strip()
+                expediente_de[folio_v] = exp_nuevo.strip()
+                st.success("Expediente %s asignado a %s. Lo que lleves "
+                           "capturado abajo sigue intacto; recuerda guardar "
+                           "la valoración." % (exp_nuevo.strip(),
+                                               fila_v.get("nombre", "")))
+
+        # El de arriba y el de abajo son el mismo guardado. Con nueve apartados
+        # desplegados, el botón del final queda a varias pantallas de distancia
+        # y el operador captura mucho rato sin guardar.
+        guardar_arriba = st.button("Guardar valoración", type="primary",
+                                   key="bval_top_%s" % folio_v,
+                                   width="stretch")
+        st.caption("Lo que capturas vive en la pantalla hasta que guardas. "
+                   "Conviene guardar al terminar cada apartado.")
 
         st.info("Un renglón por documento. En **Detalle** escribe el nombre de la "
                 "constancia — «Diplomado en Gestión Escolar», «Curso de Evaluación "
@@ -1141,7 +1163,9 @@ if hay_gente:
             st.info("El bloque b2 llegó a su tope de %g puntos; los cursos que "
                     "sigas capturando ya no suman." % tope_b2)
 
-        if st.button("Guardar valoración", type="primary", key=f"bval_{folio_v}"):
+        guardar_abajo = st.button("Guardar valoración", type="primary",
+                                  key="bval_%s" % folio_v, width="stretch")
+        if guardar_arriba or guardar_abajo:
             if not capturo.strip():
                 st.error("Anota en la barra lateral quién está capturando.")
             else:
@@ -1190,7 +1214,7 @@ if hay_gente:
 
 
 # --- 3. PRELACIÓN ---------------------------------------------------------
-with tab_pre:
+if seccion == PRELACION:
     st.subheader("Lista de prelación")
     st.caption("Orden por puntaje total; desempate por formación académica y, en segundo "
                "término, por antigüedad en el nivel superior de la SEJ (Art. 24 inciso i).")
