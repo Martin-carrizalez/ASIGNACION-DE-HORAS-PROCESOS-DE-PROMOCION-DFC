@@ -57,8 +57,29 @@ ESTATUS = ["RECIBIDA", "RECIBIDA CON FALTANTES", "SUBSANADA", "IMPROCEDENTE"]
 # Las seis categorías del nivel superior. Se guardan partidas en categoría y
 # nivel porque así las lee el sistema de asignación, que arma el puesto como
 # "HORAS DE TITULAR A".
+# De menor a mayor: el orden decide cuál es "la mayor que ostenta" cuando
+# alguien tiene horas en varias.
 CATEGORIAS = ["ASOCIADO A", "ASOCIADO B", "ASOCIADO C",
               "TITULAR A", "TITULAR B", "TITULAR C"]
+
+
+def columna_horas(categoria):
+    """Nombre interno de la columna de horas de una categoría."""
+    return "horas_" + categoria.lower().replace(" ", "_")
+
+
+def reparto_de(fila):
+    """«Asociado A 10 · Asociado B 5» a partir de las seis columnas de horas."""
+    partes = []
+    for categoria in CATEGORIAS:
+        valor = str(fila.get(columna_horas(categoria), "")).strip()
+        try:
+            horas = float(valor)
+        except (TypeError, ValueError):
+            continue
+        if horas > 0:
+            partes.append("%s %g" % (categoria.title(), horas))
+    return " · ".join(partes)
 
 # Art. 14, Primera, inciso b del Adendum y Base PRIMERA.10: hasta quince horas.
 TOPE_SOLICITUD = 15
@@ -89,7 +110,7 @@ HOJAS = {
         ("telefono", "Teléfono"),
         ("categoria_actual", "Categoría actual"),
         ("nivel_actual", "Nivel actual"),
-        ("horas_actuales", "Horas actuales"),
+        ("horas_actuales", "Horas actuales (total)"),
         ("fecha_ultima_promocion", "Fecha de última promoción"),
         ("horas_solicitadas", "Horas solicitadas"),
         ("estatus", "Estatus de la solicitud"),
@@ -97,7 +118,7 @@ HOJAS = {
         ("fecha_recepcion", "Fecha de recepción"),
         ("capturo", "Capturó"),
         ("actualizado", "Última actualización"),
-    ],
+    ] + [(columna_horas(c), "Horas de %s" % c.title()) for c in CATEGORIAS],
     "CONVOCATORIAS": [
         ("folio", "Folio"),
         ("no_convocatoria", "No. de convocatoria"),
@@ -584,6 +605,12 @@ GRADO_DE = {
 }
 GRADOS = ("licenciatura", "maestría", "doctorado")
 
+# Factores cuyos conceptos tienen grado: son los únicos donde se pide la fecha
+# del título. Sale del propio GRADO_DE, no de una lista aparte que se
+# desincronice.
+GRADOS_DE_FACTOR = {f.clave for f in tb.FACTORES
+                    for c in f.conceptos if c.clave in GRADO_DE}
+
 
 def titulos_de(renglones):
     """
@@ -822,13 +849,19 @@ with tab_reg:
         nuevo_nombre = c1.text_input("Nombre completo *")
         nuevo_rfc = c2.text_input("R.F.C. con homoclave *")
 
-        c3, c4, c5 = st.columns(3)
-        nueva_categoria = c3.selectbox("Categoría que ostenta *", CATEGORIAS)
-        nuevas_horas = c4.number_input(
-            "Horas actuales en la DFC *", min_value=0, max_value=TOPE_TOTAL,
-            step=1, value=0,
-            help="Las que tiene hoy en la Dirección de Formación Continua.")
-        horas_pide = c5.number_input(
+        # Una persona puede tener horas en más de una categoría: la unidad
+        # real es la plaza, no la persona. Se capturan las seis y se deja en
+        # cero la que no aplique.
+        st.markdown("**Horas que tiene hoy en la DFC, por categoría**")
+        horas_por_categoria = {}
+        for fila in (CATEGORIAS[:3], CATEGORIAS[3:]):
+            cols = st.columns(3)
+            for col, categoria in zip(cols, fila):
+                horas_por_categoria[categoria] = col.number_input(
+                    categoria.title(), min_value=0, max_value=TOPE_TOTAL,
+                    step=1, value=0, key="alta_%s" % categoria)
+
+        horas_pide = st.number_input(
             "Horas que solicita *", min_value=1, max_value=TOPE_SOLICITUD,
             step=1, value=1,
             help="Hasta %d horas (Adendum, art. 14, Primera, inciso b)."
@@ -848,23 +881,33 @@ with tab_reg:
             # 13 para persona física, 12 para moral. Un R.F.C. mal escrito es
             # lo único que después no se corrige sin rehacer el expediente.
             st.error("El R.F.C. tiene %d caracteres; deben ser 13." % len(rfc_alta))
+        elif sum(horas_por_categoria.values()) == 0:
+            st.error("Captura cuántas horas tiene hoy, al menos en una categoría.")
+        elif sum(horas_por_categoria.values()) > TOPE_TOTAL:
+            st.error("Las horas suman %d y el tope por persona es %d."
+                     % (sum(horas_por_categoria.values()), TOPE_TOTAL))
         elif normalizar(rfc_alta) in rfcs:
             ya = df_part.loc[df_part["rfc"].map(normalizar) == normalizar(rfc_alta),
                              "nombre"].iloc[0]
             st.error("Ese R.F.C. ya está registrado: %s" % ya)
         else:
             try:
-                # La categoría se parte en categoría y nivel: así la espera el
-                # sistema de asignación, que arma "HORAS DE TITULAR A".
-                categoria, nivel = nueva_categoria.rsplit(" ", 1)
+                # Categoría y nivel guardan la MAYOR que ostenta: es la que
+                # arma el puesto que lee el sistema de asignación. El reparto
+                # completo queda en las seis columnas de horas.
+                mayor = max((c for c in CATEGORIAS if horas_por_categoria[c] > 0),
+                            key=CATEGORIAS.index)
+                categoria, nivel = mayor.rsplit(" ", 1)
                 agregar_varios("PARTICIPANTES", [{
                     "folio": siguiente_folio(df_part),
                     "fecha_recepcion": ahora(), "nombre": nombre_alta,
                     "rfc": rfc_alta, "estatus": ESTATUS[0], "no_expediente": "",
                     "categoria_actual": categoria, "nivel_actual": nivel,
-                    "horas_actuales": int(nuevas_horas),
+                    "horas_actuales": sum(horas_por_categoria.values()),
                     "horas_solicitadas": int(horas_pide),
-                    "capturo": capturo.strip(), "actualizado": ahora()}])
+                    "capturo": capturo.strip(), "actualizado": ahora(),
+                    **{columna_horas(c): int(h) if h else ""
+                       for c, h in horas_por_categoria.items()}}])
             except Exception as err:
                 st.error("No se pudo dar de alta: %s" % err)
             else:
@@ -882,8 +925,7 @@ with tab_reg:
             "No. de expediente": df_part["no_expediente"],
             "Nombre del participante": df_part["nombre"],
             "R.F.C.": df_part["rfc"],
-            "Categoría": (df_part["categoria_actual"].astype(str) + " "
-                          + df_part["nivel_actual"].astype(str)).str.strip(),
+            "Categorías que ostenta": [reparto_de(r) for _, r in df_part.iterrows()],
             "Horas actuales": df_part["horas_actuales"],
             "Horas solicitadas": df_part["horas_solicitadas"],
             "Estatus": df_part["estatus"],
@@ -990,14 +1032,21 @@ if hay_gente:
                 "Cantidad": float(r["cantidad"] or 0),
                 "Sin valor": str(r.get("sin_valor") or "").strip().lower() in ("sí", "si", "true", "1"),
                 "Notas y observaciones": str(r.get("notas") or ""),
+                "Fecha del título": a_fecha(r.get("fecha_titulo")),
             })
+
+        COLUMNAS = ["No.", "Concepto", "Detalle", "Cantidad", "Sin valor",
+                    "Notas y observaciones"]
 
         capturado = {}
         for factor in tb.FACTORES:
             opciones = [OPCIONES[c.clave] for c in factor.conceptos]
+            # La fecha del título sólo tiene sentido en los dos bloques de
+            # formación académica; en los demás apartados estorbaría.
+            es_formacion = factor.clave in GRADOS_DE_FACTOR
+            columnas = COLUMNAS + (["Fecha del título"] if es_formacion else [])
             base = pd.DataFrame(renglones_previos[factor.clave] or [],
-                                columns=["No.", "Concepto", "Detalle", "Cantidad",
-                                         "Sin valor", "Notas y observaciones"])
+                                columns=columnas)
             parciales = cantidades_de(base.to_dict("records"))
             subtotal = tb.puntos_factor(factor, parciales)
 
@@ -1026,8 +1075,39 @@ if hay_gente:
                                  "el expediente con cero puntos."),
                         "Notas y observaciones": st.column_config.TextColumn(
                             "Notas y observaciones", width="medium"),
+                        "Fecha del título": st.column_config.DateColumn(
+                            "Fecha del título", format="DD/MM/YYYY",
+                            min_value=date(1950, 1, 1), max_value=CORTE_PERFIL,
+                            help="Fecha de expedición. De aquí salen los años "
+                                 "de titulación del perfil del artículo 13, "
+                                 "aunque el título no sume puntos."),
                     })
                 capturado[factor.clave] = editado.to_dict("records")
+
+                # Años de titulación por grado, al margen del puntaje: un
+                # título marcado sin valor puede, por su antigüedad, cubrir
+                # el perfil de la categoría (Adendum, Título Tercero, art. 13).
+                if es_formacion:
+                    cuenta = []
+                    for fila in editado.to_dict("records"):
+                        f = a_fecha(fila.get("Fecha del título"))
+                        if f is None:
+                            continue
+                        n = anios_cumplidos(f)
+                        cuenta.append({
+                            "Título": str(fila.get("Concepto") or "").split(" — ")[0],
+                            "Expedido": f.strftime("%d/%m/%Y"),
+                            "Años cumplidos al %s"
+                            % CORTE_PERFIL.strftime("%d/%m/%Y"):
+                                n if n is not None else "aún no los cumple",
+                        })
+                    if cuenta:
+                        st.dataframe(pd.DataFrame(cuenta), hide_index=True,
+                                     width="stretch")
+                    else:
+                        st.caption("Captura la fecha del título: de ahí salen "
+                                   "los años de titulación que piden los "
+                                   "perfiles del artículo 13.")
 
         # Cantidades de todos los factores juntos: es lo que entiende el tabulador.
         cantidades = {}
@@ -1098,6 +1178,9 @@ if hay_gente:
                                 "no_documento": numero,
                                 "notas": str(r.get("Notas y observaciones") or "").strip(),
                                 "sin_valor": "Sí" if sin_valor else "",
+                                "fecha_titulo": (
+                                    a_fecha(r.get("Fecha del título")).isoformat()
+                                    if a_fecha(r.get("Fecha del título")) else ""),
                                 "capturo": capturo.strip(), "actualizado": ahora()})
                 reemplazar_por_folio("PUNTAJES", folio_v, registros)
                 olvidar_lo_leido()
@@ -1135,6 +1218,7 @@ with tab_pre:
             titulos_por_grado, detalle_titulos = titulos_de(pts.to_dict("records"))
             convs = df_conv[df_conv.folio == r["folio"]]["no_convocatoria"].astype(str).tolist()
             participantes.append({
+                "reparto": reparto_de(r),
                 "titulos_por_grado": titulos_por_grado,
                 "titulos": detalle_titulos,
                 "folio": r["folio"], "nombre": r["nombre"], "rfc": r["rfc"],
@@ -1161,7 +1245,9 @@ with tab_pre:
                 "Nombre": e["nombre"],
                 "No. Exp.": e["no_expediente"],
                 "Folio": e["folio"], "R.F.C.": e["rfc"],
-                "Categoría": e["categoria_actual"], "Nivel": e["nivel_actual"],
+                "Categoría mayor": ("%s %s" % (e["categoria_actual"],
+                                               e["nivel_actual"])).strip(),
+                "Categorías que ostenta": e.get("reparto", ""),
                 "Horas actuales": e["horas_actuales"],
                 "Horas solicitadas": e["horas_solicitadas"],
                 **{"Años de %s" % g: e.get("titulos_por_grado", {}).get(g, "")
@@ -1253,7 +1339,7 @@ with tab_pre:
         st.caption("Se carga tal cual en el sistema de asignación. Las horas de "
                    "asesor, de otras áreas y de base van en blanco: salen de nómina "
                    "y se capturan allá.")
-        sin_categoria = int((tabla["Categoría"].astype(str).str.strip() == "").sum())
+        sin_categoria = int((tabla["Categoría mayor"].astype(str).str.strip() == "").sum())
         if sin_categoria:
             st.warning("%d participante(s) no traen categoría ni nivel, así que su "
                        "columna «puesto» sale vacía en ese archivo. Hay que llenarlas "
