@@ -572,6 +572,46 @@ def anios_cumplidos(fecha, corte=CORTE_PERFIL):
     return anios
 
 
+# A qué grado corresponde cada concepto de formación académica. El artículo 13
+# del Adendum pide años por GRADO —doctor, maestro, licenciatura— y no
+# distingue si el grado es en educación o no: dice "el título en alguna carrera
+# profesional a nivel de licenciatura", "el grado de maestro", "el grado de
+# doctor". Por eso las dos áreas caen en el mismo renglón.
+GRADO_DE = {
+    "LIC_EDU": "licenciatura", "LIC_OTR": "licenciatura",
+    "MAE_EDU": "maestría", "MAE_OTR": "maestría",
+    "DOC_EDU": "doctorado", "DOC_OTR": "doctorado",
+}
+GRADOS = ("licenciatura", "maestría", "doctorado")
+
+
+def titulos_de(renglones):
+    """
+    Años de titulación por grado, para el perfil del Adendum, art. 13.
+
+    Se cuentan aunque el renglón esté marcado sin valor: el perfil mira la
+    antigüedad del título, no su puntaje. De cada grado se toma el título más
+    antiguo, que es el que más ayuda a cubrir el perfil.
+
+    -> ({grado: años}, detalle legible)
+    """
+    por_grado = {}
+    detalle = []
+    for r in renglones:
+        clave = str(r.get("concepto", "")).strip()
+        grado = GRADO_DE.get(clave)
+        if grado is None:
+            continue
+        n = anios_cumplidos(a_fecha(r.get("fecha_titulo")))
+        if n is None:
+            continue
+        if n > por_grado.get(grado, -1):
+            por_grado[grado] = n
+        detalle.append((ETIQUETA.get(clave, grado), n))
+    detalle.sort(key=lambda x: -x[1])
+    return por_grado, " · ".join("%s %d año(s)" % (e, n) for e, n in detalle)
+
+
 def cantidad_de(valor, por_defecto=1.0):
     """
     Cuántos documentos ampara el renglón.
@@ -622,8 +662,12 @@ def puntos_sueltos(cantidades):
 # Contrato con el sistema de asignación (repo SISTEMA-PARA-PROPUESTAS-DFC):
 # cargar_prelacion() de esa app lee exactamente estas columnas, con estos
 # encabezados. No cambiar el texto sin cambiarlo allá también.
+# La columna de años de titulación va AL FINAL para no mover las ocho que esa
+# app ya leía. "plaza" se queda vacía a propósito: esta etapa no maneja claves
+# presupuestales.
 COLS_ASIGNACION = ["rfc", "nombre", "puesto", "plaza", "puntaje",
-                   "horas asesor", "horas otras áreas", "horas de base"]
+                   "horas asesor", "horas otras áreas", "horas de base",
+                   "años licenciatura", "años maestría", "años doctorado"]
 
 
 def excel_para_asignacion(orden):
@@ -659,6 +703,10 @@ def excel_para_asignacion(orden):
             "horas asesor": None,
             "horas otras áreas": None,
             "horas de base": None,
+            # Para acreditar el perfil del Adendum, Título Tercero, art. 13,
+            # al momento de asignar la plaza. Vacío = no acreditó ese grado.
+            **{"años %s" % g: e.get("titulos_por_grado", {}).get(g)
+               for g in GRADOS},
         })
     buffer = io.BytesIO()
     pd.DataFrame(filas, columns=COLS_ASIGNACION).to_excel(buffer, index=False)
@@ -1084,8 +1132,11 @@ with tab_pre:
                     continue
                 if clave and cantidad > 0:
                     cantidades[clave] = cantidades.get(clave, 0) + cantidad
+            titulos_por_grado, detalle_titulos = titulos_de(pts.to_dict("records"))
             convs = df_conv[df_conv.folio == r["folio"]]["no_convocatoria"].astype(str).tolist()
             participantes.append({
+                "titulos_por_grado": titulos_por_grado,
+                "titulos": detalle_titulos,
                 "folio": r["folio"], "nombre": r["nombre"], "rfc": r["rfc"],
                 "no_expediente": str(r.get("no_expediente", "")).strip(),
                 "cct": r["cct"], "categoria_actual": r["categoria_actual"],
@@ -1113,6 +1164,9 @@ with tab_pre:
                 "Categoría": e["categoria_actual"], "Nivel": e["nivel_actual"],
                 "Horas actuales": e["horas_actuales"],
                 "Horas solicitadas": e["horas_solicitadas"],
+                **{"Años de %s" % g: e.get("titulos_por_grado", {}).get(g, "")
+                   for g in GRADOS},
+                "Títulos y años": e.get("titulos", ""),
             }
             fila.update(cuadro_general(e["cantidades"]))
             fila["Convocatorias en que participa"] = e["convocatorias"]
@@ -1131,7 +1185,12 @@ with tab_pre:
         st.dataframe(tabla, width="stretch", hide_index=True)
         st.caption("Los siete apartados vienen con la misma redacción y el mismo orden "
                    "del concentrado de Recategorización 2025. «Otros estudios» no es "
-                   "columna aparte: se suma dentro de a) Formación académica.")
+                   "columna aparte: se suma dentro de a) Formación académica. "
+                   "Los años por grado se cuentan al %s y sirven para el perfil "
+                   "del Adendum, art. 13, que pide alternativamente doctorado, "
+                   "maestría o licenciatura con cierta antigüedad. Cuentan "
+                   "aunque el título no sume puntos."
+                   % CORTE_PERFIL.strftime("%d/%m/%Y"))
 
         # --- desglose horizontal documento por documento ---
         # Una columna por concepto que alguien haya acreditado; se omiten los
