@@ -30,7 +30,7 @@ import os
 import re
 import sys
 import unicodedata
-from datetime import datetime
+from datetime import date, datetime
 
 import gspread
 import pandas as pd
@@ -53,6 +53,23 @@ TZ = pytz.timezone("America/Mexico_City")
 # Se conservan porque definen las columnas de la pestaña PARTICIPANTES, que
 # esta página sigue leyendo. El contrato con el Sheet no cambia.
 ESTATUS = ["RECIBIDA", "RECIBIDA CON FALTANTES", "SUBSANADA", "IMPROCEDENTE"]
+
+# Las seis categorías del nivel superior. Se guardan partidas en categoría y
+# nivel porque así las lee el sistema de asignación, que arma el puesto como
+# "HORAS DE TITULAR A".
+CATEGORIAS = ["ASOCIADO A", "ASOCIADO B", "ASOCIADO C",
+              "TITULAR A", "TITULAR B", "TITULAR C"]
+
+# Art. 14, Primera, inciso b del Adendum y Base PRIMERA.10: hasta quince horas.
+TOPE_SOLICITUD = 15
+# Tope de horas por persona sumando todas sus plazas.
+TOPE_TOTAL = 48
+
+# Fecha a la que se cuentan los años de titulación. Sirve para acreditar el
+# perfil del Adendum, Título Tercero, artículo 13, al momento de asignar la
+# plaza. Es independiente del puntaje: un título que no suma puntos puede, por
+# su antigüedad, cubrir el perfil de la categoría.
+CORTE_PERFIL = date(2026, 10, 7)
 
 # Encabezados de cada pestaña. A la izquierda el nombre interno que usa el
 # código; a la derecha el que se lee al abrir la hoja de cálculo. Nadie que
@@ -101,6 +118,7 @@ HOJAS = {
         ("no_documento", "No. de documento"),
         ("notas", "Notas y observaciones"),
         ("sin_valor", "Documento sin valor"),
+        ("fecha_titulo", "Fecha de expedición del título"),
         ("capturo", "Capturó"),
         ("actualizado", "Última actualización"),
     ],
@@ -519,6 +537,41 @@ ETIQUETA = {c.clave: c.etiqueta.strip() for f in tb.FACTORES for c in f.concepto
 APARTADO_DE = {c.clave: f.etiqueta for f in tb.FACTORES for c in f.conceptos}
 
 
+def a_fecha(valor):
+    """Lee una fecha venga como venga: del editor, del Sheet o vacía."""
+    if valor is None or valor == "":
+        return None
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    texto = str(valor).strip()
+    if not texto or texto.lower() in ("nat", "nan", "none"):
+        return None
+    for formato in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(texto[:10], formato).date()
+        except ValueError:
+            continue
+    return None
+
+
+def anios_cumplidos(fecha, corte=CORTE_PERFIL):
+    """
+    Años enteros entre la expedición del título y la fecha de corte.
+
+    Cuenta años cumplidos, no fracciones: quien se tituló el 8 de octubre de
+    2017 tiene nueve al 7 de octubre de 2027, no diez.
+    """
+    f = a_fecha(fecha)
+    if f is None or f > corte:
+        return None
+    anios = corte.year - f.year
+    if (corte.month, corte.day) < (f.month, f.day):
+        anios -= 1
+    return anios
+
+
 def cantidad_de(valor, por_defecto=1.0):
     """
     Cuántos documentos ampara el renglón.
@@ -720,6 +773,19 @@ with tab_reg:
         c1, c2 = st.columns([3, 2])
         nuevo_nombre = c1.text_input("Nombre completo *")
         nuevo_rfc = c2.text_input("R.F.C. con homoclave *")
+
+        c3, c4, c5 = st.columns(3)
+        nueva_categoria = c3.selectbox("Categoría que ostenta *", CATEGORIAS)
+        nuevas_horas = c4.number_input(
+            "Horas actuales en la DFC *", min_value=0, max_value=TOPE_TOTAL,
+            step=1, value=0,
+            help="Las que tiene hoy en la Dirección de Formación Continua.")
+        horas_pide = c5.number_input(
+            "Horas que solicita *", min_value=1, max_value=TOPE_SOLICITUD,
+            step=1, value=1,
+            help="Hasta %d horas (Adendum, art. 14, Primera, inciso b)."
+                 % TOPE_SOLICITUD)
+
         dar_alta = st.form_submit_button("Dar de alta", type="primary")
 
     if dar_alta:
@@ -740,10 +806,16 @@ with tab_reg:
             st.error("Ese R.F.C. ya está registrado: %s" % ya)
         else:
             try:
+                # La categoría se parte en categoría y nivel: así la espera el
+                # sistema de asignación, que arma "HORAS DE TITULAR A".
+                categoria, nivel = nueva_categoria.rsplit(" ", 1)
                 agregar_varios("PARTICIPANTES", [{
                     "folio": siguiente_folio(df_part),
                     "fecha_recepcion": ahora(), "nombre": nombre_alta,
                     "rfc": rfc_alta, "estatus": ESTATUS[0], "no_expediente": "",
+                    "categoria_actual": categoria, "nivel_actual": nivel,
+                    "horas_actuales": int(nuevas_horas),
+                    "horas_solicitadas": int(horas_pide),
                     "capturo": capturo.strip(), "actualizado": ahora()}])
             except Exception as err:
                 st.error("No se pudo dar de alta: %s" % err)
@@ -762,6 +834,10 @@ with tab_reg:
             "No. de expediente": df_part["no_expediente"],
             "Nombre del participante": df_part["nombre"],
             "R.F.C.": df_part["rfc"],
+            "Categoría": (df_part["categoria_actual"].astype(str) + " "
+                          + df_part["nivel_actual"].astype(str)).str.strip(),
+            "Horas actuales": df_part["horas_actuales"],
+            "Horas solicitadas": df_part["horas_solicitadas"],
             "Estatus": df_part["estatus"],
             "Capturó": df_part["capturo"],
             "Fecha de registro": df_part["fecha_recepcion"],
